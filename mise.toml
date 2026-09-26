@@ -8,8 +8,10 @@
 # (2026-09-27). Bump deliberately via a normal dependency-update PR.
 
 [tools]
-# Rust toolchain pinned to a stable release.
-rust = "1.98.1"
+# Rust toolchain pinned to a stable release. `rustfmt` and `clippy` are
+# components, not standalone tools — mise installs them via rustup so
+# CI and local runs have the same `cargo fmt` / `cargo clippy` surface.
+rust = { version = "1.98.1", components = ["rustfmt", "clippy"] }
 # jq for JSON manipulation in scripts (subprocess parsing of generated code).
 jq = "latest"
 yq = "latest"
