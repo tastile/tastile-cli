@@ -46,8 +46,8 @@ green before merge.
    release notes.
 5. Open a PR from `release-X-Y-Z` → `main`. CI must be green; the
    `release-source-check` workflow confirms the head branch pattern.
-6. Merge (linear history — squash or rebase; merge commit is not
-   permitted).
+6. Merge with a merge commit (the only merge mode permitted by the
+   repository settings — squash and rebase are disabled).
 7. Tag `main` HEAD as `vX.Y.Z`.
 
 ## Compatibility

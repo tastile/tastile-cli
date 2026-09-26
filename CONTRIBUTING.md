@@ -50,8 +50,10 @@ mise run ci
    - `main` is protected with required CI checks
      (`build, test, lint` on all three OSes + the
      `release-source-check` workflow).
-   - `required_linear_history: true` is enabled, so PRs merge with
-     **squash or rebase** — merge commits are not permitted.
+   - **Merge commit only.** Repository settings disable squash and
+     rebase merges; PRs land via the default "Create a merge commit"
+     button. `required_linear_history` is **off** so merge commits
+     are explicitly permitted.
    - `required_conversation_resolution: true` is enabled, so all
      review comments must be resolved before merge.
    - `required_signatures: true` is enabled, so all commits must be

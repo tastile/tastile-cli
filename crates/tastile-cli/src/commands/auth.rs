@@ -19,7 +19,7 @@ use chrono::Utc;
 use tastile_api::{ApiClient, ApiConfig, BearerToken};
 use tastile_auth::{
     AuthorizationCode, CallbackListener, CredentialStore, KeyringStore, PkceState, ServerBridge,
-    TokenExchangeResponse, open_browser,
+    TokenExchangeResponse, build_authorization_url, open_browser,
 };
 use tastile_config::{Config, with_env_overrides};
 use tracing::{info, warn};
@@ -55,7 +55,7 @@ async fn login(cfg: Config, print_url: bool, client_id: Option<String>) -> Resul
 
     let pkce = PkceState::generate();
     let pair = pkce.pair();
-    let auth_url = build_auth_url(&web_base, &client_id, &redirect_uri, &pair, SCOPE);
+    let auth_url = build_authorization_url(&web_base, &client_id, &redirect_uri, &pair, SCOPE);
 
     println!("Opening browser...");
     if print_url {
@@ -254,30 +254,4 @@ fn parse_expires_at(raw: Option<&str>) -> Option<chrono::DateTime<chrono::Utc>> 
     chrono::DateTime::parse_from_rfc3339(raw)
         .ok()
         .map(|d| d.with_timezone(&chrono::Utc))
-}
-
-fn build_auth_url(
-    web_base: &Url,
-    client_id: &str,
-    redirect_uri: &str,
-    pair: &tastile_auth::PkcePair,
-    scope: &str,
-) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(256);
-    let base_path = web_base
-        .join("/cli/authorize")
-        .unwrap_or_else(|_| web_base.clone());
-    write!(
-        &mut s,
-        "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
-        base_path.as_str(),
-        urlencoding::encode(client_id),
-        urlencoding::encode(redirect_uri),
-        urlencoding::encode(scope),
-        urlencoding::encode(&pair.state),
-        urlencoding::encode(&pair.challenge),
-    )
-    .expect("writing to String never fails");
-    s
 }

@@ -83,6 +83,41 @@ pub const DEFAULT_USER: &str = "default";
 // Keyring-backed implementation.
 // ---------------------------------------------------------------------------
 
+/// In-memory credential store. Used by integration tests and by the
+/// `--dry-run` flag in the CLI. Production paths always go through
+/// [`KeyringStore`].
+#[derive(Debug, Default)]
+pub struct MemoryStore {
+    inner: std::sync::Mutex<std::collections::HashMap<(String, String), StoredToken>>,
+}
+
+impl CredentialStore for MemoryStore {
+    fn load(&self, service: &str, user: &str) -> Result<Option<StoredToken>, CredentialError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .get(&(service.to_string(), user.to_string()))
+            .cloned())
+    }
+
+    fn save(&self, service: &str, user: &str, token: &StoredToken) -> Result<(), CredentialError> {
+        self.inner
+            .lock()
+            .unwrap()
+            .insert((service.to_string(), user.to_string()), token.clone());
+        Ok(())
+    }
+
+    fn delete(&self, service: &str, user: &str) -> Result<(), CredentialError> {
+        self.inner
+            .lock()
+            .unwrap()
+            .remove(&(service.to_string(), user.to_string()));
+        Ok(())
+    }
+}
+
 /// Production credential store backed by the `keyring` crate.
 #[derive(Debug, Default, Clone)]
 pub struct KeyringStore;
@@ -129,46 +164,6 @@ impl CredentialStore for KeyringStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// In-memory credential store for tests and for the `--dry-run` flag in
-    /// the CLI. Not exported because production must go through the OS
-    /// keyring.
-    #[derive(Default)]
-    pub(super) struct MemoryStore {
-        inner: std::sync::Mutex<std::collections::HashMap<(String, String), StoredToken>>,
-    }
-
-    impl CredentialStore for MemoryStore {
-        fn load(&self, service: &str, user: &str) -> Result<Option<StoredToken>, CredentialError> {
-            Ok(self
-                .inner
-                .lock()
-                .unwrap()
-                .get(&(service.to_string(), user.to_string()))
-                .cloned())
-        }
-
-        fn save(
-            &self,
-            service: &str,
-            user: &str,
-            token: &StoredToken,
-        ) -> Result<(), CredentialError> {
-            self.inner
-                .lock()
-                .unwrap()
-                .insert((service.to_string(), user.to_string()), token.clone());
-            Ok(())
-        }
-
-        fn delete(&self, service: &str, user: &str) -> Result<(), CredentialError> {
-            self.inner
-                .lock()
-                .unwrap()
-                .remove(&(service.to_string(), user.to_string()));
-            Ok(())
-        }
-    }
 
     #[test]
     fn roundtrip() {
