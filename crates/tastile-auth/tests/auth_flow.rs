@@ -266,7 +266,7 @@ fn authorization_url_carries_pkce_params_and_excludes_verifier() {
 #[tokio::test]
 async fn callback_listener_receives_code_and_state() {
     let listener = bind_callback().await;
-    let url = listener.redirect_uri();
+    let redirect_uri = listener.redirect_uri();
 
     let expected_code = "opaque-grant-abc-123";
     let expected_state = "csrf-state-xyz-987";
@@ -274,9 +274,12 @@ async fn callback_listener_receives_code_and_state() {
     tokio::spawn(async move {
         // Tiny sleep so `serve()` has the listener accepting.
         tokio::time::sleep(Duration::from_millis(50)).await;
-        // Real browser-shaped redirect: GET with code+state in the query.
+        // Real browser-shaped redirect: GET on the listener's own
+        // redirect_uri, with `code` and `state` in the query. The
+        // listener already exposes `/callback` as its path, so the
+        // request must NOT append `/cli/callback` on top of that.
         let _ = reqwest::get(format!(
-            "{url}/cli/callback?code={code}&state={state}",
+            "{redirect_uri}?code={code}&state={state}",
             code = expected_code,
             state = expected_state
         ))
@@ -713,14 +716,16 @@ async fn full_happy_path_loopback_to_token_to_credential_store() {
     assert!(auth_url.contains(&pair.challenge));
 
     // Bind the callback listener and have a "browser" hit it with the same
-    // state we just put into the URL.
+    // state we just put into the URL. The listener's `redirect_uri()`
+    // already terminates in `/callback` — the request must not append an
+    // additional `/cli/callback` path segment on top of that.
     let listener = bind_callback().await;
-    let url = listener.redirect_uri();
+    let redirect_uri = listener.redirect_uri();
     let sent_state = pair.state.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let _ = reqwest::get(format!(
-            "{url}/cli/callback?code=happy-grant&state={sent_state}"
+            "{redirect_uri}?code=happy-grant&state={sent_state}"
         ))
         .await;
     });
