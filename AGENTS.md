@@ -22,6 +22,13 @@ that invariant, the change is wrong.
 | Typed Rust client surface | `crates/tastile-api/src/*.rs` |
 | Drift gate | `crates/tastile-api/build.rs` + `scripts/check-openapi-drift.sh` |
 
+The pinned spec declares 21 `operationId`s. The CLI surface covers 18
+of them — every operation a command-line or TUI client can drive
+today. The remaining 3 (`delete_owner`, `export_owner`,
+`publish_schedule_definition`) are admin / data-portability endpoints
+that are intentionally out of scope for the initial CLI and **not**
+covered by the drift gate.
+
 When you bump the pinned OpenAPI revision, run:
 
 ```sh
@@ -50,11 +57,17 @@ Allowed:
 
 ## 4. Authentication
 
-Login is browser-mediated; see `crates/tastile-auth/src/lib.rs`. The token
-exchange relies on a server-side endpoint (`POST /api/cli/api-token`) that
-mirrors `/api/mobile/api-token` and is **not yet exposed**. Until that
-endpoint lands, `tastile auth login` captures the authorization code and
-prints the structured request for manual exchange.
+Login is browser-mediated; see `crates/tastile-auth/src/lib.rs`. The CLI
+generates PKCE (`code_verifier`, `code_challenge`, `state`,
+`redirect_uri`) and opens `{web_url}/cli/authorize?…`. The web side owns
+the Better Auth session cookie and mints a one-time authorization
+grant. The CLI exchanges the grant for a Tastile API bearer token at
+`POST {web_url}/api/cli/token` with body
+`{ code, code_verifier, redirect_uri }` — **no Better Auth cookie**.
+
+Until both web-side routes (`/cli/authorize` and `/api/cli/token`) ship,
+`tastile auth login` captures the grant and prints the structured
+request body so an operator can drive the exchange by hand.
 
 The bearer token is stored in the OS credential store under
 service `tastile-cli`, user `default`. Never log the token. Never print it

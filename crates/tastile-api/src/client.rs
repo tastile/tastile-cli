@@ -194,6 +194,32 @@ impl ApiClient {
         resp.json::<T>().await.map_err(ApiError::Transport)
     }
 
+    /// `PUT` with a JSON body.
+    pub async fn put_json<B: Serialize, T: DeserializeOwned>(
+        &self,
+        token: &BearerToken,
+        path: &str,
+        body: &B,
+    ) -> ApiResult<T> {
+        let url = self.url(path)?;
+        let resp = self
+            .inner
+            .put(url)
+            .bearer_auth(token.as_str())
+            .json(body)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let message = resp.text().await.unwrap_or_default();
+            return Err(ApiError::Http {
+                status: status.as_u16(),
+                message: redact(&message),
+            });
+        }
+        resp.json::<T>().await.map_err(ApiError::Transport)
+    }
+
     /// `POST` with no body. Used by `POST /v1/auth/signout`.
     pub async fn post_empty(
         &self,

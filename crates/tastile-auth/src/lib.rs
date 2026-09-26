@@ -6,21 +6,28 @@
 //!   in tests),
 //! - the **PKCE state machine** for the OAuth-style authorization flow,
 //! - the **loopback callback listener** that catches the `?code=…` redirect
-//!   from the web login page,
-//! - the **browser launcher** (`open::that`).
+//!   from the web authorization route,
+//! - the **browser launcher** (`open::that`),
+//! - the **`code → bearer token` exchange** against
+//!   `POST {web_url}/api/cli/token` (no Better Auth cookie required).
 //!
-//! The actual exchange of `code → Tastile API token` is described in
-//! `server_bridge.rs`. Until the server-side endpoint
-//! (`POST /api/mobile/api-token`-equivalent on `app.tastile.app`) is
-//! implemented, the flow is structured but stops at "code captured".
+//! The wire contract is documented in `server_bridge.rs`. Until the
+//! web-side `/cli/authorize` route and `/api/cli/token` endpoint are
+//! exposed, `ServerBridge::exchange` returns
+//! `ServerEndpointUnavailable` with the structured request body so an
+//! operator can drive the exchange by hand. The CLI surface never logs
+//! or echoes the one-time grant, code verifier, or bearer token.
 //!
 //! # Security principles (see `docs/architecture.md` for the full list)
 //!
 //! - Bearer tokens are stored in the OS credential store only.
 //! - Token values are never logged, never returned by `Display`, never
 //!   printed by `doctor`.
+//! - One-time grants and code verifiers are never logged.
 //! - The PKCE `state` parameter is checked on callback.
 //! - The callback listener binds to loopback (`127.0.0.1` or `::1`) only.
+//! - The token-exchange HTTP client is configured with `cookie_store(false)`
+//!   so the CLI never carries the Better Auth session cookie.
 
 #![doc(html_root_url = "https://docs.rs/tastile-auth/0.1.0")]
 
@@ -34,4 +41,7 @@ pub use browser::open_browser;
 pub use callback::{CallbackListener, CallbackOutcome};
 pub use credential::{CredentialStore, DEFAULT_SERVICE, DEFAULT_USER, KeyringStore, StoredToken};
 pub use pkce::{PkcePair, PkceState};
-pub use server_bridge::{AuthorizationCode, HttpServerBridge, ServerBridge, ServerBridgeError};
+pub use server_bridge::{
+    AuthorizationCode, HttpServerBridge, ServerBridge, ServerBridgeError, TokenExchangeRequest,
+    TokenExchangeResponse,
+};

@@ -76,10 +76,14 @@ single commit (`chore(openapi): bump pinned revision to <short-sha>`).
 ## Adding a new CLI subcommand
 
 1. Add the subcommand definition to `crates/tastile-cli/src/cli.rs`.
-2. Add the implementation under `crates/tastile-cli/src/commands/<name>.rs`.
-3. Wire it into `crates/tastile-cli/src/main.rs`.
-4. Add at least one unit test.
-5. Update `README.md` "What the CLI does today".
+2. Add the typed wrapper in `crates/tastile-cli/src/app.rs` (the shared
+   application service layer; the TUI uses the same functions).
+3. Add the implementation under `crates/tastile-cli/src/commands/<name>.rs`.
+4. Wire it into `crates/tastile-cli/src/main.rs`.
+5. Add at least one unit test.
+6. If the operation is a new typed call, add an `OperationContract` row
+   in `crates/tastile-api/build.rs` so the drift gate enforces it.
+7. Update `README.md` "What the CLI does today".
 
 ## License
 

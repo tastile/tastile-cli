@@ -38,15 +38,16 @@ tastile-cli/
 ├── .github/workflows/         ci.yml, openapi-drift.yml, release-source-check.yml
 ├── crates/
 │   ├── tastile-api/
-│   │   ├── build.rs           OpenAPI drift gate
+│   │   ├── build.rs           OpenAPI drift gate (OperationContract table)
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── client.rs      ApiClient + ApiConfig
 │   │       ├── error.rs       ApiError enum
 │   │       ├── model.rs       ApiVersion, CommandResponse
 │   │       ├── tiles.rs       list_tiles + TileListView
-│   │       ├── source_tiles.rs
-│   │       ├── prompts.rs
+│   │       ├── source_tiles.rs  create / update / reflow / completion / placements
+│   │       ├── prompts.rs     list_pending_prompts / request / resolve / startup-recovery
+│   │       ├── executions.rs  start / pause / resume / finish
 │   │       └── auth.rs        signout()
 │   ├── tastile-auth/
 │   │   └── src/
@@ -54,18 +55,19 @@ tastile-cli/
 │   │       ├── pkce.rs        PkceState, PkcePair
 │   │       ├── callback.rs    CallbackListener
 │   │       ├── browser.rs     open_browser()
-│   │       └── server_bridge.rs  POST /api/cli/api-token
+│   │       └── server_bridge.rs  POST /api/cli/token (no Better Auth cookie)
 │   ├── tastile-config/
 │   │   └── src/{lib.rs, paths.rs}
 │   └── tastile-cli/
 │       └── src/
 │           ├── main.rs
-│           ├── cli.rs         clap definitions
+│           ├── cli.rs         clap definitions (user-friendly subcommand names)
+│           ├── app.rs         shared application service layer (CLI + TUI)
 │           ├── tracing_init.rs
-│           ├── output.rs      table printer
-│           ├── tui.rs         ratatui TUI
+│           ├── output.rs      table printers
+│           ├── tui.rs         ratatui TUI (uses app::*)
 │           └── commands/      auth.rs, doctor.rs, tiles.rs, today.rs,
-│                              source_tiles.rs, prompts.rs,
+│                              source_tiles.rs, executions.rs, prompts.rs,
 │                              schedule.rs, completions.rs
 ├── docs/                      architecture.md, development.md, release.md
 ├── openapi/                   git submodule → tastile-openapi
@@ -87,7 +89,9 @@ scripts/sync-openapi.sh <sha>     # pin to a specific commit
 The script:
 
 1. `git submodule update --remote openapi` (or the requested tag/SHA).
-2. `cargo build` — exercises the `build.rs` drift gate.
+2. `cargo build` — exercises the `build.rs` drift gate. The gate verifies
+   18 operations, their paths, methods, request schemas, required
+   payload fields, and 200 response shapes.
 3. `cargo test --workspace --all-features`.
 4. `scripts/check-openapi-drift.sh`.
 
@@ -102,13 +106,15 @@ chore(openapi): bump pinned revision to <short-sha>
 1. Confirm the operationId is in the pinned `openapi/openapi.yaml`. If
    not, bump the pin first.
 2. Add the request / response model in `crates/tastile-api/src/<area>.rs`.
-3. Add the operationId to the `REQUIRED_OPERATION_IDS` list in
-   `crates/tastile-api/build.rs`.
+3. Add the operationId to the `OperationContract` table in
+   `crates/tastile-api/build.rs` (path, method, operationId, request body
+   schema, required payload fields, response 200 shape).
 4. Re-export the function in `crates/tastile-api/src/lib.rs`.
-5. Add a CLI subcommand (or extend an existing one) under
+5. Add the typed wrapper in `crates/tastile-cli/src/app.rs`.
+6. Add a CLI subcommand (or extend an existing one) under
    `crates/tastile-cli/src/commands/`.
-6. Add at least one unit test.
-7. Run `mise run ci`.
+7. Add at least one unit test.
+8. Run `mise run ci`.
 
 ## Lint and warning posture
 

@@ -1,10 +1,16 @@
 //! `tastile auth login | status | logout | exchange`.
 //!
-//! The login flow is structured but does not yet complete: the web side has
-//! not exposed a public `/api/cli/api-token` endpoint, so the bridge stops
-//! at "code captured from the browser". When the endpoint exists, drop in
-//! the real exchange in `tastile_auth::server_bridge::HttpServerBridge` and
-//! remove the explicit "server endpoint unavailable" message from `login`.
+//! Implements the browser-mediated authorization grant protocol described in
+//! `tastile_auth::server_bridge`. The CLI does not touch the Better Auth
+//! session cookie at any point: the web authorization route uses that cookie
+//! to authenticate the user, mints a one-time grant bound to
+//! (code_challenge, redirect_uri, user, expiration), and the CLI exchanges
+//! the grant at `POST {web_url}/api/cli/token` with no cookie attached.
+//!
+//! Until the web-side routes (`/cli/authorize`, `/api/cli/token`) are
+//! exposed, `login` returns a clear "server endpoint unavailable" message
+//! with the structured request body. The CLI side is wired for the moment
+//! those endpoints land.
 
 use std::process::ExitCode;
 
@@ -13,7 +19,7 @@ use chrono::Utc;
 use tastile_api::{ApiClient, ApiConfig, BearerToken};
 use tastile_auth::{
     AuthorizationCode, CallbackListener, CredentialStore, KeyringStore, PkceState, ServerBridge,
-    open_browser,
+    TokenExchangeResponse, open_browser,
 };
 use tastile_config::{Config, with_env_overrides};
 use tracing::{info, warn};
@@ -74,37 +80,52 @@ async fn login(cfg: Config, print_url: bool, client_id: Option<String>) -> Resul
     if !pkce.state_matches(&returned_state) {
         bail!("state mismatch — refusing to exchange (possible CSRF)");
     }
-    println!("✓ Signed in (authorization code captured).");
+    println!("✓ Browser authorization captured (one-time grant received).");
 
-    // The server-side token exchange endpoint is not yet exposed. We print
-    // the structured request so the operator can complete the exchange by
-    // hand. When the endpoint lands, drop in the `HttpServerBridge` here and
-    // save the token into the credential store.
+    // Exchange the one-time grant for a bearer token. The exchange endpoint
+    // does not require the Better Auth cookie: the (grant, code_verifier,
+    // redirect_uri) tuple is sufficient proof of authorization.
     let bridge = tastile_auth::HttpServerBridge::new();
-    match bridge.exchange(
+    let result = bridge.exchange(
         &web_base,
-        &client_id,
         &AuthorizationCode::new(code.clone()),
         pkce.verifier(),
         &redirect_uri,
-    ) {
-        Ok(_token) => {
-            // Real exchange path: persist the bearer token and exit.
-            // (Not reachable until the endpoint exists.)
-            unreachable!(
-                "server endpoint returned a token but the placeholder does not produce one"
-            )
+    );
+
+    match result {
+        Ok(TokenExchangeResponse {
+            token,
+            expires_at,
+            subject,
+        }) => {
+            let stored = tastile_auth::StoredToken::new(
+                cfg.api_url.clone(),
+                token,
+                parse_expires_at(expires_at.as_deref()),
+                subject,
+            );
+            KeyringStore
+                .save(
+                    tastile_auth::DEFAULT_SERVICE,
+                    tastile_auth::DEFAULT_USER,
+                    &stored,
+                )
+                .context("could not save credential")?;
+            println!("✓ Bearer token saved to credential store.");
+            Ok(ExitCode::SUCCESS)
         }
         Err(tastile_auth::ServerBridgeError::ServerEndpointUnavailable(request)) => {
-            println!("✓ Tastile CLI authorized (browser side).");
+            println!("✓ Browser authorization captured.");
             println!();
-            println!("The server-side token exchange endpoint is not yet exposed.");
-            println!("Captured authorization code: <redacted>");
+            println!("The server-side token exchange endpoint is not yet exposed:");
+            println!("  POST {}/api/cli/token", web_base);
+            println!();
             println!("To complete the exchange by hand, run:");
             println!();
             println!("  {request}");
             println!();
-            println!("After exchanging the code, the resulting bearer token is");
+            println!("After exchanging the grant, the resulting bearer token is");
             println!("expected to be saved into the OS credential store under");
             println!("service=`{}`.", tastile_auth::DEFAULT_SERVICE);
             Ok(ExitCode::SUCCESS)
@@ -139,19 +160,13 @@ async fn status(cfg: Config) -> Result<ExitCode> {
                     println!("  (token is EXPIRED — re-run `tastile auth login`)");
                 }
             }
-            // Belt-and-braces: print the API base from config so the user can
-            // spot a mismatch.
             if token.api_base_url != cfg.api_url {
                 println!(
                     "  Note: stored API base does not match current config (`{}`)",
                     cfg.api_url
                 );
             }
-            // Reachability probe against /v1/auth/signout using the stored
-            // token — `signout` is idempotent, so a 204 means the token is
-            // valid. We swallow the side-effect by re-saving immediately
-            // after, but we DO mutate server state. To avoid that, just
-            // attempt a GET on `/v1/tiles` instead.
+            // Reachability probe against /v1/tiles (read-only, idempotent).
             let api = ApiClient::new(ApiConfig::new(&cfg.api_url)?)?;
             let bearer = BearerToken::new(token.bearer.clone());
             match tastile_api::list_tiles(
@@ -182,9 +197,6 @@ async fn logout(cfg: Config) -> Result<ExitCode> {
         .load(tastile_auth::DEFAULT_SERVICE, tastile_auth::DEFAULT_USER)
         .context("credential store error")?;
     if let Some(token) = loaded {
-        // Best-effort server-side revoke. If the call fails we still drop
-        // the local copy — Better Auth-style revocation is asynchronous on
-        // the server and re-trying would just amplify the error.
         let api = ApiClient::new(ApiConfig::new(&cfg.api_url)?)?;
         let bearer = BearerToken::new(token.bearer.clone());
         match tastile_api::auth::signout(&api, &bearer).await {
@@ -200,22 +212,29 @@ async fn logout(cfg: Config) -> Result<ExitCode> {
 }
 
 async fn exchange(cfg: Config, code: String, _state: String) -> Result<ExitCode> {
-    // Operator escape hatch: re-run the bridge with a captured (code, state).
-    // Useful when the server endpoint is being debugged.
     let cfg = with_env_overrides(cfg);
     let web_base = Url::parse(&cfg.web_url).context("invalid web_url in config")?;
     let bridge = tastile_auth::HttpServerBridge::new();
-    match bridge.exchange(
+    let result = bridge.exchange(
         &web_base,
-        &cfg.oauth_client_id,
         &AuthorizationCode::new(code),
         // We don't have the verifier after the fact — pass empty. The real
         // bridge endpoint, when it exists, will reject this with a 400.
         "",
-        &format!("{REDIRECT_PATH}"),
-    ) {
-        Ok(token) => {
-            let stored = tastile_auth::StoredToken::new(cfg.api_url.clone(), token, None, None);
+        REDIRECT_PATH,
+    );
+    match result {
+        Ok(TokenExchangeResponse {
+            token,
+            expires_at,
+            subject,
+        }) => {
+            let stored = tastile_auth::StoredToken::new(
+                cfg.api_url.clone(),
+                token,
+                parse_expires_at(expires_at.as_deref()),
+                subject,
+            );
             KeyringStore
                 .save(
                     tastile_auth::DEFAULT_SERVICE,
@@ -230,6 +249,13 @@ async fn exchange(cfg: Config, code: String, _state: String) -> Result<ExitCode>
     }
 }
 
+fn parse_expires_at(raw: Option<&str>) -> Option<chrono::DateTime<chrono::Utc>> {
+    let raw = raw?;
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|d| d.with_timezone(&chrono::Utc))
+}
+
 fn build_auth_url(
     web_base: &Url,
     client_id: &str,
@@ -237,7 +263,6 @@ fn build_auth_url(
     pair: &tastile_auth::PkcePair,
     scope: &str,
 ) -> String {
-    // Hand-build to keep the URL parameter order stable and obvious.
     use std::fmt::Write as _;
     let mut s = String::with_capacity(256);
     let base_path = web_base

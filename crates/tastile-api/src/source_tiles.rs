@@ -1,13 +1,19 @@
 //! Source-tile operations.
 //!
 //! Spec surface in this module:
-//! - `GET    /v1/source-tiles`           → `list_source_tiles`
-//! - `GET    /v1/source-tiles/{id}`      → `get_source_tile`
-//! - `POST   /v1/source-tiles/{id}/cancel` → `cancel_source_tile`
+//! - `GET    /v1/source-tiles`                  → `list_source_tiles`
+//! - `POST   /v1/source-tiles`                  → `create_source_tile`
+//! - `GET    /v1/source-tiles/{id}`             → `get_source_tile`
+//! - `PUT    /v1/source-tiles/{id}`             → `update_source_tile`
+//! - `POST   /v1/source-tiles/{id}/cancel`      → `cancel_source_tile`
+//! - `GET    /v1/source-tiles/{id}/completion`  → `get_source_tile_completion`
+//! - `GET    /v1/source-tiles/{id}/placements`  → `list_source_tile_placements`
+//! - `POST   /v1/source-tiles/{id}/reflow`      → `reflow_source_tile`
 //!
 //! Each operation here corresponds 1:1 to an `operationId` in the pinned
 //! `openapi/openapi.yaml`. The drift gate in `build.rs` enforces that those
-//! operationIds still exist.
+//! operationIds still exist with the right method, path, body schema,
+//! response schema, path parameters, and required envelope fields.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -246,6 +252,226 @@ pub async fn cancel_source_tile(
     req: &CancelSourceTileRequest,
 ) -> ApiResult<CommandResponse> {
     let path = format!("/v1/source-tiles/{id}/cancel");
+    client.post_json(token, &path, req).await
+}
+
+// ---------------------------------------------------------------------------
+// Create / Update.
+// ---------------------------------------------------------------------------
+
+/// Spec: `components.schemas.ScheduleTileDefinitionSchema`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleTileDefinition {
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+}
+
+/// Spec: `components.schemas.SchedulePlanDefinitionSchema`. The CLI exposes
+/// only the fields it actually sets; the remainder is forwarded as
+/// `serde_json::Value` so the CLI can stay aligned with server changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SchedulePlanDefinition {
+    pub role: i32,
+    pub completion: serde_json::Value,
+    pub planning: serde_json::Value,
+    pub metrics: Vec<serde_json::Value>,
+    pub decisions: Vec<serde_json::Value>,
+    pub references: Vec<serde_json::Value>,
+}
+
+/// Spec: `components.schemas.SourceScheduleDefinitionSchema`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateSourceScheduleDefinition {
+    pub generation: serde_json::Value,
+    pub split_policy: serde_json::Value,
+    pub window: serde_json::Value,
+    pub priority: i32,
+    pub required_duration_ms: i64,
+}
+
+/// Spec: `components.schemas.SpanSchema`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Span {
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+}
+
+/// Spec: `components.schemas.FlowDefinitionSchema` — opaque JSON, the CLI
+/// builds these server-side via the planning engine.
+pub type FlowDefinition = serde_json::Value;
+
+/// Spec: `components.schemas.CreateSourceTilePayloadSchema`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CreateSourceTilePayload {
+    pub tile: ScheduleTileDefinition,
+    pub plan: SchedulePlanDefinition,
+    pub flows: Vec<FlowDefinition>,
+    pub schedule: CreateSourceScheduleDefinition,
+    pub horizon: Span,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relations: Option<Vec<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_client_local_id: Option<Uuid>,
+}
+
+/// Spec: `components.schemas.CreateSourceTileRequest`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CreateSourceTileRequest {
+    pub idempotency_key: Uuid,
+    pub payload: CreateSourceTilePayload,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurred_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<i64>,
+}
+
+impl CreateSourceTileRequest {
+    pub fn new(payload: CreateSourceTilePayload) -> Self {
+        Self {
+            idempotency_key: Uuid::new_v4(),
+            payload,
+            occurred_at: None,
+            expected_revision: None,
+        }
+    }
+}
+
+/// `POST /v1/source-tiles` → `operationId: create_source_tile`.
+pub async fn create_source_tile(
+    client: &ApiClient,
+    token: &BearerToken,
+    req: &CreateSourceTileRequest,
+) -> ApiResult<CommandResponse> {
+    client.post_json(token, "/v1/source-tiles", req).await
+}
+
+/// Spec: `components.schemas.UpdateSourceTilePayloadSchema`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UpdateSourceTilePayload {
+    pub tile: ScheduleTileDefinition,
+    pub plan: SchedulePlanDefinition,
+    pub flows: Vec<FlowDefinition>,
+    pub schedule: CreateSourceScheduleDefinition,
+    pub horizon: Span,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relations: Option<Vec<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_client_local_id: Option<Uuid>,
+}
+
+/// Spec: `components.schemas.UpdateSourceTileRequest`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UpdateSourceTileRequest {
+    pub idempotency_key: Uuid,
+    pub payload: UpdateSourceTilePayload,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurred_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<i64>,
+}
+
+impl UpdateSourceTileRequest {
+    pub fn new(payload: UpdateSourceTilePayload) -> Self {
+        Self {
+            idempotency_key: Uuid::new_v4(),
+            payload,
+            occurred_at: None,
+            expected_revision: None,
+        }
+    }
+}
+
+/// `PUT /v1/source-tiles/{id}` → `operationId: update_source_tile`.
+pub async fn update_source_tile(
+    client: &ApiClient,
+    token: &BearerToken,
+    id: Uuid,
+    req: &UpdateSourceTileRequest,
+) -> ApiResult<CommandResponse> {
+    let path = format!("/v1/source-tiles/{id}");
+    client.put_json(token, &path, req).await
+}
+
+// ---------------------------------------------------------------------------
+// Completion / Placements / Reflow.
+// ---------------------------------------------------------------------------
+
+/// Spec: `GET /v1/source-tiles/{id}/completion` → `operationId: get_source_tile_completion`.
+///
+/// The response schema is intentionally empty (`schema: {}`), so the CLI
+/// surfaces the raw JSON value to the user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceTileCompletion(pub serde_json::Value);
+
+/// `GET /v1/source-tiles/{id}/completion` → `operationId: get_source_tile_completion`.
+pub async fn get_source_tile_completion(
+    client: &ApiClient,
+    token: &BearerToken,
+    id: Uuid,
+) -> ApiResult<SourceTileCompletion> {
+    let path = format!("/v1/source-tiles/{id}/completion");
+    let value: serde_json::Value = client.get_json(token, &path, &[]).await?;
+    Ok(SourceTileCompletion(value))
+}
+
+/// `GET /v1/source-tiles/{id}/placements` → `operationId: list_source_tile_placements`.
+pub async fn list_source_tile_placements(
+    client: &ApiClient,
+    token: &BearerToken,
+    id: Uuid,
+    limit: Option<u32>,
+) -> ApiResult<Vec<PlacementTileRead>> {
+    let path = format!("/v1/source-tiles/{id}/placements");
+    let mut pairs: Vec<(&'static str, String)> = Vec::new();
+    if let Some(l) = limit {
+        pairs.push(("limit", l.to_string()));
+    }
+    client.get_json(token, &path, &pairs).await
+}
+
+/// Spec: `components.schemas.ReflowSourceTilePayloadSchema`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReflowSourceTilePayload {
+    pub range: Span,
+}
+
+/// Spec: `components.schemas.ReflowSourceTileRequest`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReflowSourceTileRequest {
+    pub idempotency_key: Uuid,
+    pub payload: ReflowSourceTilePayload,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurred_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<i64>,
+}
+
+impl ReflowSourceTileRequest {
+    pub fn new(range: Span) -> Self {
+        Self {
+            idempotency_key: Uuid::new_v4(),
+            payload: ReflowSourceTilePayload { range },
+            occurred_at: None,
+            expected_revision: None,
+        }
+    }
+}
+
+/// `POST /v1/source-tiles/{id}/reflow` → `operationId: reflow_source_tile`.
+pub async fn reflow_source_tile(
+    client: &ApiClient,
+    token: &BearerToken,
+    id: Uuid,
+    req: &ReflowSourceTileRequest,
+) -> ApiResult<CommandResponse> {
+    let path = format!("/v1/source-tiles/{id}/reflow");
     client.post_json(token, &path, req).await
 }
 

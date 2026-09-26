@@ -39,6 +39,7 @@
 pub mod auth;
 pub mod client;
 pub mod error;
+pub mod executions;
 pub mod model;
 pub mod prompts;
 pub mod source_tiles;
@@ -46,15 +47,26 @@ pub mod tiles;
 
 pub use client::{ApiClient, ApiConfig, BearerToken};
 pub use error::{ApiError, ApiResult};
+pub use executions::{
+    ExecutionLifecycleRequest, FinishExecutionPayload, FinishExecutionRequest,
+    StartExecutionPayload, StartExecutionRequest, finish_execution, pause_execution,
+    resume_execution, start_execution,
+};
 pub use model::{ApiVersion, CommandResponse, OwnerDeleteResponse, PendingWork, TileListView};
 pub use prompts::{
-    PromptSubject, PromptView, RequestPromptRequest, ResolvePromptRequest, list_pending_prompts,
-    request_prompt, resolve_prompt,
+    PromptSubject, PromptView, RequestPromptRequest, ResolvePromptRequest, StartupRecoveryPayload,
+    StartupRecoveryRequest, list_pending_prompts, request_prompt, resolve_prompt,
+    respond_startup_recovery,
 };
 pub use source_tiles::{
-    CancelSourceTilePayload, CancelSourceTileRequest, PlacementTileRead, RecurrenceView,
-    SourceOccurrenceRead, SourceScheduleDefinition, SourceTileDetailRead, SourceTileRead,
-    SourceTileSummary, TemporalView, cancel_source_tile, get_source_tile, list_source_tiles,
+    CancelSourceTilePayload, CancelSourceTileRequest, CreateSourceScheduleDefinition,
+    CreateSourceTilePayload, CreateSourceTileRequest, PlacementTileRead, RecurrenceView,
+    ReflowSourceTilePayload, ReflowSourceTileRequest, RelationDefinitionRead,
+    SchedulePlanDefinition, ScheduleTileDefinition, SourceOccurrenceRead, SourceScheduleDefinition,
+    SourceTileCompletion, SourceTileDetailRead, SourceTileRead, SourceTileSummary, Span,
+    TemporalView, UpdateSourceTilePayload, UpdateSourceTileRequest, cancel_source_tile,
+    create_source_tile, get_source_tile, get_source_tile_completion, list_source_tile_placements,
+    list_source_tiles, reflow_source_tile, update_source_tile,
 };
 pub use tiles::list_tiles;
 

@@ -50,7 +50,7 @@ cargo build --release
 | Subcommand | Description |
 | --- | --- |
 | `tastile` (no args) | Launch the TUI. |
-| `tastile auth login` | Browser-based PKCE authorization. |
+| `tastile auth login` | Browser-based PKCE authorization (loopback callback). |
 | `tastile auth status` | Show whether a bearer token is stored. |
 | `tastile auth logout` | Drop the local token and revoke server-side. |
 | `tastile doctor` | Diagnostics: toolchain, credential store, API reachability. |
@@ -58,9 +58,20 @@ cargo build --release
 | `tastile tiles` | List tiles in the current day window. |
 | `tastile source-tiles list` | List source tiles. |
 | `tastile source-tiles get <id>` | Show one source tile + its placements. |
+| `tastile source-tiles create --title …` | Create a source tile from a draft (or `--from-json`). |
+| `tastile source-tiles update <id> --from-json` | Update a source tile. |
 | `tastile source-tiles cancel <id>` | Cancel a source tile. |
+| `tastile source-tiles completion <id>` | Show the completion plan tree. |
+| `tastile source-tiles placements <id>` | List placements of a source tile. |
+| `tastile source-tiles reflow <id> --from … --to …` | Re-flow placements within a window. |
+| `tastile executions start <placement-id>` | Start an execution. |
+| `tastile executions pause <execution-id>` | Pause an execution. |
+| `tastile executions resume <execution-id>` | Resume an execution. |
+| `tastile executions finish <execution-id> --kind N` | Finish an execution. |
 | `tastile prompts list` | List pending prompts. |
-| `tastile prompts resolve <id> --answer-kind N` | Resolve a prompt. |
+| `tastile prompts request <kind> …` | Request a new prompt (server-driven). |
+| `tastile prompts startup-recovery …` | Trigger a startup-recovery prompt. |
+| `tastile prompts resolve <id> --resolution ack|dismiss|act` | Resolve a prompt. |
 | `tastile schedule regenerate` | Re-publish the schedule definition. |
 | `tastile completions <shell>` | Generate a shell completion script. |
 | `tastile version` | Print version + pinned OpenAPI metadata. |
@@ -96,31 +107,43 @@ HTTP shape. The drift gate in `crates/tastile-api/build.rs` enforces:
 1. The spec parses as OpenAPI 3.1.
 2. `info.title` and `info.version` are present.
 3. Every path starts with `/v1/`.
-4. Every operation the typed client claims to use still exists.
+4. Every operation the typed client claims to use still exists, with
+   the right method, path parameters, request body schema, required
+   payload fields, and 200 response shape.
+
+The CLI surface covers **18 of the 21** operations in the pinned spec.
+The 3 admin operations (`delete_owner`, `export_owner`,
+`publish_schedule_definition`) are intentionally out of scope for the
+initial CLI and are not in the drift-gate contract table.
 
 The deeper `scripts/check-openapi-drift.sh` is the same check, run as a
 shell script so it can also run in CI on every PR and on a weekly cron.
 
 ## Authentication
 
-`POST /v1/auth/signout` exists on the API. Login is browser-mediated and
-works like the mobile and desktop apps:
+The CLI does **not** hold, copy, or forward the Better Auth session
+cookie. Login is browser-mediated and uses the standard
+authorization-code grant with PKCE (RFC 7636):
 
 ```text
 CLI
- ↓ PKCE + state
-localhost loopback listener
+  generates: code_verifier, code_challenge, state, loopback redirect_uri
  ↓
-browser → app.tastile.app/cli/authorize
+browser → app.tastile.app/cli/authorize?…
+   (Better Auth session cookie authenticates the user)
+   web mints a one-time authorization grant bound to (challenge, redirect_uri, user)
  ↓
-one-time authorization code
+browser → http://127.0.0.1:<port>/cli/callback?code=…&state=…
  ↓
-code → Tastile API token (via POST /api/cli/api-token — server-side WIP)
+CLI
+  - verifies state matches (constant time)
+  - POSTs /api/cli/token { code, code_verifier, redirect_uri }  (NO cookie)
+  - receives { token, expires_at, subject }
  ↓
 OS credential store (Keychain / Credential Manager / Secret Service)
 ```
 
-Until the server-side `/api/cli/api-token` endpoint is exposed (see the
+Until the server-side `/api/cli/token` endpoint is exposed (see the
 follow-up section in `docs/architecture.md`), the CLI captures the
 authorization code from the browser and prints the structured exchange
 request so an operator can complete it by hand. The token is then loaded
