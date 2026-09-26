@@ -39,8 +39,10 @@ pub mod server_bridge;
 
 pub use browser::open_browser;
 pub use callback::{CallbackListener, CallbackOutcome};
-pub use credential::{CredentialStore, DEFAULT_SERVICE, DEFAULT_USER, KeyringStore, StoredToken};
-pub use pkce::{PkcePair, PkceState};
+pub use credential::{
+    CredentialStore, DEFAULT_SERVICE, DEFAULT_USER, KeyringStore, MemoryStore, StoredToken,
+};
+pub use pkce::{PkcePair, PkceState, build_authorization_url};
 pub use server_bridge::{
     AuthorizationCode, HttpServerBridge, ServerBridge, ServerBridgeError, TokenExchangeRequest,
     TokenExchangeResponse,
