@@ -151,8 +151,8 @@ clippy → test → openapi drift (Linux only).
 ## Local config override
 
 ```sh
-export TASTILE_API_URL=https://api.staging.tastile.app
-export TASTILE_WEB_URL=https://app.staging.tastile.app
+export TASTILE_API_URL=https://api.staging.app.tastile.app
+export TASTILE_WEB_URL=https://staging.app.tastile.app
 export TASTILE_VERBOSE=1
 ```
 
