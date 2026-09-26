@@ -1,0 +1,28 @@
+# Release-source check.
+#
+# Required by tastile/project-init §11: a PR with `base == main` must have
+# `head_ref` matching the `release-X-Y-Z` pattern. This is the same gate
+# as in `tastile-root`, applied to this repository.
+
+name: release-source-check
+
+on:
+  pull_request:
+    types: [opened, reopened, edited, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: validate head_ref
+        run: |
+          head_ref="${{ github.event.pull_request.head.ref }}"
+          echo "head_ref=$head_ref"
+          if ! echo "$head_ref" | grep -qE '^release-[0-9]+-[0-9]+-[0-9]+$'; then
+            echo "::error::head_ref '$head_ref' does not match release-X-Y-Z; direct-to-main PRs are not allowed"
+            exit 1
+          fi

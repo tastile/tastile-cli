@@ -1,0 +1,37 @@
+[package]
+name = "tastile-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tastile command-line client and TUI."
+default-run = "tastile"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "tastile"
+path = "src/main.rs"
+
+[dependencies]
+tastile-api.workspace = true
+tastile-auth.workspace = true
+tastile-config.workspace = true
+
+clap.workspace = true
+clap_complete.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+url.workspace = true
+urlencoding.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+anyhow.workspace = true

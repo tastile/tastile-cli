@@ -1,0 +1,44 @@
+# Dedicated OpenAPI drift gate.
+#
+# Runs the same `check-openapi-drift.sh` script that operators run locally,
+# but on a schedule so we catch cases where the openapi submodule pointer
+# drifts from the wire contract even when no PR is opened.
+
+name: openapi-drift
+
+on:
+  schedule:
+    # weekly on Monday 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: install mise
+        uses: jdx/mise-action@v2
+
+      - name: mise install
+        run: mise install
+
+      - name: drift check
+        run: scripts/check-openapi-drift.sh
+
+      - name: comment on issue if drift detected
+        if: failure()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: openapi-drift
+          message: |
+            ⚠️ OpenAPI drift detected. Run `scripts/check-openapi-drift.sh` locally for
+            details, or read the failing workflow log. The pinned submodule revision
+            no longer matches the typed Rust API surface in `crates/tastile-api`.

@@ -1,0 +1,81 @@
+//! `tastile` — command-line and TUI client for the Tastile v1 API.
+//!
+//! Run with no arguments to launch the TUI. Run with a subcommand to invoke
+//! a single CLI operation and exit. See `docs/architecture.md` for the
+//! overall design.
+
+#![doc(html_root_url = "https://docs.rs/tastile-cli/0.1.0")]
+
+use std::process::ExitCode;
+
+use clap::Parser;
+use tracing::{error, info};
+
+mod cli;
+mod commands;
+mod output;
+mod tracing_init;
+mod tui;
+
+use cli::{Cli, Command};
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+
+    // Initialise tracing. `--verbose` upgrades to `debug`; otherwise `info`.
+    if let Err(e) = tracing_init::init(cli.verbose) {
+        eprintln!("warning: could not initialise tracing: {e}");
+    }
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            error!("could not start tokio runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let result = runtime.block_on(run(cli));
+    match result {
+        Ok(code) => code,
+        Err(e) => {
+            error!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
+    info!("tastile {}", env!("CARGO_PKG_VERSION"));
+
+    let cfg = tastile_config::load().unwrap_or_default();
+    let cfg = tastile_config::with_env_overrides(cfg);
+
+    match cli.command {
+        None => {
+            // No subcommand → launch the TUI.
+            tui::run(cfg).await.map(|()| ExitCode::SUCCESS)
+        }
+        Some(Command::Auth(args)) => commands::auth::run(cfg, args).await,
+        Some(Command::Doctor) => commands::doctor::run(cfg).await,
+        Some(Command::Tiles(args)) => commands::tiles::run(cfg, args).await,
+        Some(Command::Today(args)) => commands::today::run(cfg, args).await,
+        Some(Command::Schedule(args)) => commands::schedule::run(cfg, args).await,
+        Some(Command::SourceTiles(args)) => commands::source_tiles::run(cfg, args).await,
+        Some(Command::Prompts(args)) => commands::prompts::run(cfg, args).await,
+        Some(Command::Completions(args)) => commands::completions::run(args.shell),
+        Some(Command::Version) => {
+            println!("tastile {}", env!("CARGO_PKG_VERSION"));
+            println!(
+                "openapi: {} ({})",
+                tastile_api::API_VERSION,
+                tastile_api::API_TITLE
+            );
+            println!("wire: /v1/tiles /v1/prompts/* /v1/source-tiles/* /v1/auth/signout");
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}

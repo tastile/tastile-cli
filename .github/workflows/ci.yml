@@ -1,0 +1,82 @@
+# CI for tastile-cli.
+#
+# Goals:
+# - Run on every PR to main, release branches, and pushes to main.
+# - Verify `cargo fmt`, `cargo clippy`, `cargo test`.
+# - Verify the openapi drift gate (submodule + Rust client surface).
+# - Cache the cargo registry / target dir to keep CI fast.
+#
+# No `tastile-root` checkout. The `tastile-openapi` submodule is cloned
+# directly from `tastile/tastile-openapi`.
+
+name: ci
+
+on:
+  push:
+    branches: [main, "release-*"]
+  pull_request:
+    branches: [main, "release-*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build, test, lint (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: install mise
+        uses: jdx/mise-action@v2
+
+      - name: mise install
+        run: mise install
+
+      - name: cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        env:
+          RUSTFLAGS: "-D warnings"
+
+      - name: cargo test
+        run: cargo test --workspace --all-features
+
+      - name: openapi drift check (linux only — uses yq)
+        if: runner.os == 'Linux'
+        run: scripts/check-openapi-drift.sh
+
+      - name: upload artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tastile-cli-${{ runner.os }}-logs
+          path: |
+            target/
+            ~/.cargo/registry/cache/
+          if-no-files-found: ignore
+          retention-days: 7

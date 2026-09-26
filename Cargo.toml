@@ -1,0 +1,121 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/tastile-api",
+  "crates/tastile-auth",
+  "crates/tastile-config",
+  "crates/tastile-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/tastile/tastile-cli"
+homepage = "https://github.com/tastile/tastile-cli"
+authors = ["Tastile Contributors"]
+publish = false
+
+[workspace.dependencies]
+# Workspace members.
+tastile-api = { path = "crates/tastile-api", version = "0.1.0" }
+tastile-auth = { path = "crates/tastile-auth", version = "0.1.0" }
+tastile-config = { path = "crates/tastile-config", version = "0.1.0" }
+tastile-cli = { path = "crates/tastile-cli", version = "0.1.0" }
+
+# HTTP client — minimal, no async runtime pulled in for our small surface.
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls",
+  "json",
+  "stream",
+] }
+
+# Async runtime. tokio is the conservative choice for reqwest + ratatui.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "fs", "net", "io-util"] }
+
+# Serialization. serde_json is sufficient; the wire contract is JSON.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Error handling.
+thiserror = "2"
+anyhow = "1"
+
+# Logging / diagnostics.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# CLI parsing. clap with derive macro.
+clap = { version = "4", features = ["derive", "env", "string"] }
+
+# TUI.
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Shell completion generation.
+clap_complete = "4"
+
+# Mock HTTP server for tests.
+mockito = "1"
+
+# UUIDs / time / base64 / URL parsing — wire primitives.
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+url = "2"
+urlencoding = "2"
+
+# OS credential store. `keyring` 3.x is async-aware.
+keyring = { version = "3", default-features = false, features = [
+  "apple-native",
+  "windows-native",
+  "sync-secret-service",
+  "vendored",
+] }
+
+# PKCE / random bytes for the auth flow.
+rand = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+
+# Web browser launch (cross-platform best-effort).
+open = "5"
+
+# HTTP server for the loopback auth callback.
+tiny_http = "0.12"
+
+# Config file parsing (for ~/.config/tastile/config.toml).
+toml = "0.8"
+dirs = "5"
+
+# Test-only assertions.
+pretty_assertions = "1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+# pedantic is intentionally off by default — we lean on `cargo clippy` for the
+# core correctness warnings. Style suggestions are surfaced via `cargo fmt`
+# and code review instead.
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# The remaining lints are noisier than the signal they provide for this
+# codebase. Keep them at `allow` and address them only if they catch a real
+# bug.
+collapsible_if = "allow"
+needless_collect = "allow"
+useless_format = "allow"
+field_reassign_with_default = "allow"
+needless_pass_by_value = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

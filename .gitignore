@@ -1,0 +1,30 @@
+# Build artifacts
+/target
+**/*.rs.bk
+*.pdb
+
+# Cargo lock for libraries is fine; keep it committed
+# (do NOT ignore Cargo.lock — see docs/development.md#lockfile-policy)
+
+# Local environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# mise auto-update artifacts
+.mise.local.toml
+.mise.local.lock
+
+# Generated drift report artifacts (never committed)
+/tmp/openapi-drift.txt
+.openapi-drift-cache/
+
+# Test fixtures that contain real user data
+tests/fixtures/*.real.*

@@ -1,0 +1,77 @@
+# mise toolchain configuration for tastile-cli.
+#
+# This is the canonical version authority for the project.
+# Bootstrap with `mise install` and run commands through `mise run <task>`
+# or `mise exec -- <command>` so you do not depend on shell activation.
+#
+# Versions chosen to match the toolchain the project was scaffolded with
+# (2026-09-27). Bump deliberately via a normal dependency-update PR.
+
+[tools]
+# Rust toolchain pinned to a stable release.
+rust = "1.98.1"
+# jq for JSON manipulation in scripts (subprocess parsing of generated code).
+jq = "latest"
+yq = "latest"
+# yq for YAML ↔ JSON round-trip during OpenAPI drift checks.
+# Installed via `mise use --global` style invocation; see README.
+
+[env]
+# Disable automatic project discovery above this repo so accidental
+# nesting inside tastile-root cannot bleed in via a parent .mise.toml.
+MISE_PARENT_DIR = "false"
+# Ensure Rust output is deterministic across CI and local runs.
+CARGO_TERM_COLOR = "auto"
+CARGO_INCREMENTAL = "0"
+RUSTFLAGS = "-D warnings"
+# Use a single target dir to keep CI and local artifacts comparable.
+CARGO_TARGET_DIR = "{{ config_root }}/target"
+
+[tasks.lint]
+description = "Format check and clippy across the workspace."
+run = "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-features -- -D warnings"
+
+[tasks.test]
+description = "Run unit and integration tests for the workspace."
+run = "cargo test --workspace --all-features"
+
+[tasks.fmt]
+description = "Format the workspace."
+run = "cargo fmt --all"
+
+[tasks.build]
+description = "Release build of the `tastile` CLI."
+run = "cargo build --release -p tastile-cli"
+
+[tasks.run]
+description = "Run the `tastile` CLI with the given args."
+run = "cargo run -p tastile-cli --"
+
+[tasks.tui]
+description = "Run the TUI without arguments."
+run = "cargo run -p tastile-cli --"
+
+[tasks.sync-openapi]
+description = "Pin the openapi submodule to a new revision and verify drift."
+run = "scripts/sync-openapi.sh"
+
+[tasks.check-openapi-drift]
+description = "Detect drift between pinned openapi.yaml and the Rust API client."
+run = "scripts/check-openapi-drift.sh"
+
+[tasks.ci]
+description = "Canonical CI entry point (fmt + clippy + test + openapi-drift)."
+run = [
+  "cargo fmt --all -- --check",
+  "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+  "cargo test --workspace --all-features",
+  "scripts/check-openapi-drift.sh",
+]
+
+[tasks.doctor]
+description = "Run the `tastile doctor` CLI subcommand."
+run = "cargo run -p tastile-cli -- doctor"
+
+[tasks."auth:status"]
+description = "Run the `tastile auth status` CLI subcommand."
+run = "cargo run -p tastile-cli -- auth status"
