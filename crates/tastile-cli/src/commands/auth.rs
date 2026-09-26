@@ -6,19 +6,14 @@
 //! to authenticate the user, mints a one-time grant bound to
 //! (code_challenge, redirect_uri, user, expiration), and the CLI exchanges
 //! the grant at `POST {web_url}/api/cli/token` with no cookie attached.
-//!
-//! Until the web-side routes (`/cli/authorize`, `/api/cli/token`) are
-//! exposed, `login` returns a clear "server endpoint unavailable" message
-//! with the structured request body. The CLI side is wired for the moment
-//! those endpoints land.
 
 use std::process::ExitCode;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use tastile_api::{ApiClient, ApiConfig, BearerToken};
 use tastile_auth::{
-    AuthorizationCode, CallbackListener, CredentialStore, KeyringStore, PkceState, ServerBridge,
+    AuthorizationCode, CallbackListener, CredentialStore, KeyringStore, PkceState,
     TokenExchangeResponse, build_authorization_url, open_browser,
 };
 use tastile_config::{Config, with_env_overrides};
@@ -86,52 +81,35 @@ async fn login(cfg: Config, print_url: bool, client_id: Option<String>) -> Resul
     // does not require the Better Auth cookie: the (grant, code_verifier,
     // redirect_uri) tuple is sufficient proof of authorization.
     let bridge = tastile_auth::HttpServerBridge::new();
-    let result = bridge.exchange(
-        &web_base,
-        &AuthorizationCode::new(code.clone()),
-        pkce.verifier(),
-        &redirect_uri,
-    );
+    let TokenExchangeResponse {
+        token,
+        expires_at,
+        subject,
+    } = bridge
+        .fetch_token(
+            &web_base,
+            &AuthorizationCode::new(code),
+            pkce.verifier(),
+            &redirect_uri,
+        )
+        .await
+        .context("token exchange failed")?;
 
-    match result {
-        Ok(TokenExchangeResponse {
-            token,
-            expires_at,
-            subject,
-        }) => {
-            let stored = tastile_auth::StoredToken::new(
-                cfg.api_url.clone(),
-                token,
-                parse_expires_at(expires_at.as_deref()),
-                subject,
-            );
-            KeyringStore
-                .save(
-                    tastile_auth::DEFAULT_SERVICE,
-                    tastile_auth::DEFAULT_USER,
-                    &stored,
-                )
-                .context("could not save credential")?;
-            println!("✓ Bearer token saved to credential store.");
-            Ok(ExitCode::SUCCESS)
-        }
-        Err(tastile_auth::ServerBridgeError::ServerEndpointUnavailable(request)) => {
-            println!("✓ Browser authorization captured.");
-            println!();
-            println!("The server-side token exchange endpoint is not yet exposed:");
-            println!("  POST {}/api/cli/token", web_base);
-            println!();
-            println!("To complete the exchange by hand, run:");
-            println!();
-            println!("  {request}");
-            println!();
-            println!("After exchanging the grant, the resulting bearer token is");
-            println!("expected to be saved into the OS credential store under");
-            println!("service=`{}`.", tastile_auth::DEFAULT_SERVICE);
-            Ok(ExitCode::SUCCESS)
-        }
-        Err(e) => Err(anyhow!(e)),
-    }
+    let stored = tastile_auth::StoredToken::new(
+        cfg.api_url.clone(),
+        token,
+        parse_expires_at(expires_at.as_deref()),
+        subject,
+    );
+    KeyringStore
+        .save(
+            tastile_auth::DEFAULT_SERVICE,
+            tastile_auth::DEFAULT_USER,
+            &stored,
+        )
+        .context("could not save credential")?;
+    println!("✓ Bearer token saved to credential store.");
+    Ok(ExitCode::SUCCESS)
 }
 
 async fn status(cfg: Config) -> Result<ExitCode> {
@@ -215,38 +193,33 @@ async fn exchange(cfg: Config, code: String, _state: String) -> Result<ExitCode>
     let cfg = with_env_overrides(cfg);
     let web_base = Url::parse(&cfg.web_url).context("invalid web_url in config")?;
     let bridge = tastile_auth::HttpServerBridge::new();
-    let result = bridge.exchange(
-        &web_base,
-        &AuthorizationCode::new(code),
-        // We don't have the verifier after the fact — pass empty. The real
-        // bridge endpoint, when it exists, will reject this with a 400.
-        "",
-        REDIRECT_PATH,
+    // We don't have the verifier after the fact — pass empty. The server
+    // returns 400 invalid_grant (PKCE mismatch), which surfaces as an
+    // error to the operator.
+    let TokenExchangeResponse {
+        token,
+        expires_at,
+        subject,
+    } = bridge
+        .fetch_token(&web_base, &AuthorizationCode::new(code), "", REDIRECT_PATH)
+        .await
+        .context("token exchange failed")?;
+
+    let stored = tastile_auth::StoredToken::new(
+        cfg.api_url.clone(),
+        token,
+        parse_expires_at(expires_at.as_deref()),
+        subject,
     );
-    match result {
-        Ok(TokenExchangeResponse {
-            token,
-            expires_at,
-            subject,
-        }) => {
-            let stored = tastile_auth::StoredToken::new(
-                cfg.api_url.clone(),
-                token,
-                parse_expires_at(expires_at.as_deref()),
-                subject,
-            );
-            KeyringStore
-                .save(
-                    tastile_auth::DEFAULT_SERVICE,
-                    tastile_auth::DEFAULT_USER,
-                    &stored,
-                )
-                .context("could not save credential")?;
-            println!("✓ Bearer token saved to credential store.");
-            Ok(ExitCode::SUCCESS)
-        }
-        Err(e) => Err(anyhow!(e)),
-    }
+    KeyringStore
+        .save(
+            tastile_auth::DEFAULT_SERVICE,
+            tastile_auth::DEFAULT_USER,
+            &stored,
+        )
+        .context("could not save credential")?;
+    println!("✓ Bearer token saved to credential store.");
+    Ok(ExitCode::SUCCESS)
 }
 
 fn parse_expires_at(raw: Option<&str>) -> Option<chrono::DateTime<chrono::Utc>> {
