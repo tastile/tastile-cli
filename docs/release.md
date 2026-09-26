@@ -16,15 +16,39 @@ main (protected)
   CI enforces this via `.github/workflows/release-source-check.yml`.
 - `<issue-number>` is a working branch off the release branch.
 
+## Pinning policy for the `openapi/` submodule
+
+For every CLI release, the `openapi/` submodule pointer must point at
+a **concrete, immutable revision** — a tag (`tastile-openapi@vX.Y.Z`)
+or a full SHA — and that revision must be recorded in the merge
+commit's body (e.g. `openapi: b0c781dc18111645324e2abc38621b1564d4c518 (v1.0.0)`).
+
+| Path | Pin source | Reproducibility |
+| --- | --- | --- |
+| Release commit | tag or SHA from `tastile-openapi` | exact |
+| Day-to-day dev | `scripts/sync-openapi.sh` (HEAD) is **allowed** for working branches only | mutable until pinned |
+
+`scripts/sync-openapi.sh` without arguments bumps to upstream HEAD —
+this is fine for feature / fix branches but **must not** be the final
+state on a release branch. The release PR is responsible for re-pinning
+to a tag or SHA and verifying `scripts/check-openapi-drift.sh` is still
+green before merge.
+
 ## Cutting a release
 
 1. Confirm `main` is green.
-2. Cut `release-X-Y-Z` from `main`.
-3. Update `CHANGELOG.md` — move `[Unreleased]` items to a versioned
-   heading.
-4. Open a PR from `release-X-Y-Z` → `main`. CI must be green.
-5. Merge with a merge commit.
-6. Tag `main` HEAD as `vX.Y.Z`.
+2. Confirm the `openapi/` submodule is pinned to a tag or SHA (not
+   upstream HEAD). If not, `scripts/sync-openapi.sh vX.Y.Z` (or
+   `scripts/sync-openapi.sh <sha>`).
+3. Cut `release-X-Y-Z` from `main`.
+4. Update `CHANGELOG.md` — move `[Unreleased]` items to a versioned
+   heading; record the OpenAPI pin (`openapi: <sha> (<tag>)`) in the
+   release notes.
+5. Open a PR from `release-X-Y-Z` → `main`. CI must be green; the
+   `release-source-check` workflow confirms the head branch pattern.
+6. Merge (linear history — squash or rebase; merge commit is not
+   permitted).
+7. Tag `main` HEAD as `vX.Y.Z`.
 
 ## Compatibility
 
@@ -38,7 +62,9 @@ wire contract can change.
 
 1. Cut `release-X-Y-Z` from the most recent `main` tag.
 2. Cherry-pick the fix commit.
-3. Cut a `vX.Y.Z+1` tag on the merge commit.
+3. Re-pin the `openapi/` submodule to the same tag/SHA as the
+   previous release (do **not** pick up a newer revision in a hotfix).
+4. Cut a `vX.Y.Z+1` tag on the merge commit.
 
 ## Versioning
 

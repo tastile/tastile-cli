@@ -155,8 +155,8 @@ Default: `https://api.tastile.app` / `https://app.tastile.app`. Override via
 `~/.config/tastile/config.toml`:
 
 ```toml
-api_url = "https://api.staging.tastile.app"
-web_url = "https://app.staging.tastile.app"
+api_url = "https://api.staging.app.tastile.app"
+web_url = "https://staging.app.tastile.app"
 api_timeout_ms = 30_000
 verbose = false
 oauth_client_id = "tastile-cli"
@@ -165,8 +165,8 @@ oauth_client_id = "tastile-cli"
 Or via environment variables:
 
 ```sh
-TASTILE_API_URL=https://api.staging.tastile.app
-TASTILE_WEB_URL=https://app.staging.tastile.app
+TASTILE_API_URL=https://api.staging.app.tastile.app
+TASTILE_WEB_URL=https://staging.app.tastile.app
 TASTILE_API_TIMEOUT_MS=30000
 TASTILE_VERBOSE=1
 ```
