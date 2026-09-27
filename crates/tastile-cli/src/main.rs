@@ -8,7 +8,7 @@
 //! helper functions in [`app`] so the HTTP layer is implemented exactly
 //! once.
 
-#![doc(html_root_url = "https://docs.rs/tastile-cli/0.1.0")]
+#![doc(html_root_url = "https://docs.rs/tastile-cli/1.0.0")]
 
 use std::process::ExitCode;
 

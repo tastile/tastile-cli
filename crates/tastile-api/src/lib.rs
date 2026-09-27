@@ -34,7 +34,7 @@
 //! 4. Update this crate's types, `Cargo.toml` if any version gates apply, and
 //!    the README's "Wire contract" section.
 
-#![doc(html_root_url = "https://docs.rs/tastile-api/0.1.0")]
+#![doc(html_root_url = "https://docs.rs/tastile-api/1.0.0")]
 
 pub mod auth;
 pub mod client;
