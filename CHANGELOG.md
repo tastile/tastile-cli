@@ -14,9 +14,14 @@ tracked in [tastile/tastile-web#153](https://github.com/tastile/tastile-web/issu
 ### Added
 
 - Standalone Git repository with no sibling-repo runtime/build dependency.
-- `openapi/` git submodule pinned to `tastile-openapi@v1.0.0`
-  (`b0c781dc18111645324e2abc38621b1564d4c518`). The `scripts/sync-openapi.sh`
-  script bumps the pin and re-runs the drift gate.
+- `openapi/` git submodule pinned to `tastile-openapi@v1.0.1`
+  (`0a8a66b54720587f238ba35207c0c7ddfd2ad4d5`, tag `66b9d8e`). The pin
+  was originally v1.0.0 (`b0c781d`) at scaffold time and was bumped in
+  commit `cb935a0` to track Core 1.0.1's wire contract refresh
+  (Issue #153 §A.1/A.2 granular API-token scope +
+  `x-tastile-required-scope` operation extension). The
+  `scripts/sync-openapi.sh` script bumps the pin and re-runs the
+  drift gate.
 - `crates/tastile-api` — typed HTTP client + structural build-time drift
   gate. The `OperationContract` table in `build.rs` enforces for every
   typed call:
