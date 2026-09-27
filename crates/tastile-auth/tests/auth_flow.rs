@@ -686,6 +686,59 @@ fn server_endpoint_unavailable_returns_structured_request_body() {
 }
 
 // ---------------------------------------------------------------------------
+// Regression guard (CLI #153): `HttpServerBridge::fetch_token` must NOT
+// return `ServerEndpointUnavailable`. That variant is reserved for the
+// legacy `ServerBridge::exchange` stub (see AC 9 above); the production
+// path used by `tastile auth login` is the async `fetch_token` and must
+// issue a real HTTP POST or surface a transport / HTTP error instead.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn fetch_token_never_returns_server_endpoint_unavailable() {
+    // 200 path: a real server reply must yield Ok(TokenExchangeResponse),
+    // never ServerEndpointUnavailable.
+    let (web_base_ok, _) =
+        spawn_mock(|_, _| MockReply::ok(r#"{"token":"t-1","subject":"u-1"}"#)).await;
+    let bridge = HttpServerBridge::new();
+    let pkce = PkceState::generate();
+    let resp = bridge
+        .fetch_token(
+            &web_base_ok,
+            &AuthorizationCode::new("grant-ok"),
+            pkce.verifier(),
+            "http://127.0.0.1:1/cli/callback",
+        )
+        .await
+        .expect("200 must not return ServerEndpointUnavailable");
+    assert_eq!(resp.token, "t-1");
+
+    // 4xx path: a real server 4xx must surface as ServerBridgeError::Http,
+    // never as ServerEndpointUnavailable. The status code is preserved so
+    // the CLI can distinguish 409 already-used from 410 gone, etc.
+    let (web_base_4xx, _) =
+        spawn_mock(|_, _| MockReply::status(409, r#"{"error":"already_used"}"#)).await;
+    let err = bridge
+        .fetch_token(
+            &web_base_4xx,
+            &AuthorizationCode::new("grant-409"),
+            pkce.verifier(),
+            "http://127.0.0.1:2/cli/callback",
+        )
+        .await
+        .expect_err("4xx must not return Ok");
+    match err {
+        ServerBridgeError::Http { status: 409, .. } => {}
+        ServerBridgeError::ServerEndpointUnavailable(_) => {
+            panic!(
+                "fetch_token must never surface ServerEndpointUnavailable; \
+                 got {err:?}"
+            );
+        }
+        other => panic!("expected ServerBridgeError::Http, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Full happy-path: URL → callback → state match → exchange → credential
 // store → Display strings clean.
 // ---------------------------------------------------------------------------

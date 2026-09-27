@@ -195,19 +195,22 @@ its redacted summary is a character count and a 2-char prefix only.
 
 ### Status (2026-09-27)
 
-Until the web side exposes `/cli/authorize` and `/api/cli/token`,
-`HttpServerBridge::exchange` returns
-`ServerBridgeError::ServerEndpointUnavailable` with the structured
-request body it would have sent. The CLI prints the body and exits 0
-so the user knows exactly what to `curl` by hand.
+✅ Resolved by tastile/tastile-web#153 (CLI side). `tastile auth login`
+now calls `HttpServerBridge::fetch_token` directly, which issues the
+real `POST {web_url}/api/cli/token`. The legacy
+`ServerBridge::exchange` method is preserved as a no-stub
+implementation that still returns
+`ServerBridgeError::ServerEndpointUnavailable` so the wire-contract
+test in `auth_flow.rs` (AC 9) keeps passing; only the `login` command
+path was switched to the real call.
 
 ## Usable CLI flow
 
 ```text
 $ tastile auth login
-   opens browser → user approves → CLI captures grant → CLI prints
-   the POST {web_url}/api/cli/token body to exchange by hand
-   (until the server-side endpoint ships)
+   opens browser → user approves → CLI captures grant → CLI POSTs
+   {code, code_verifier, redirect_uri} to {web_url}/api/cli/token →
+   bearer token saved to OS credential store
 
 $ tastile today
 $ tastile source-tiles create --title "Read Rust book"

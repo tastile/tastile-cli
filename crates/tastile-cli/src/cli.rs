@@ -84,15 +84,6 @@ pub enum AuthCommand {
 
     /// Forget the locally-stored bearer token.
     Logout,
-
-    /// Re-run the token exchange against an existing authorization grant
-    /// (intended for `tastile doctor --verbose` debugging).
-    Exchange {
-        #[arg(long)]
-        code: String,
-        #[arg(long)]
-        state: String,
-    },
 }
 
 #[derive(Debug, Args)]

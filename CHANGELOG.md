@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `tastile auth login` now actually issues the HTTP `POST /api/cli/token`
+  call via `HttpServerBridge::fetch_token` instead of returning
+  `ServerEndpointUnavailable`. The CLI can complete the browser-mediated
+  PKCE flow against `tastile-web` once Issue #153 lands on the web side.
+  Closes the CLI half of tastile/tastile-web#153.
+
 ### Added
 
 - Initial scaffold.
@@ -62,12 +70,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Known gaps (server-side)
 
-The end-to-end auth flow stops at `ServerEndpointUnavailable` until the
-web origin exposes:
-
-| Endpoint | Method | Auth | Body | Returns |
-| --- | --- | --- | --- | --- |
-| `/cli/authorize` | GET | Better Auth session | (query) | `302 {redirect_uri}?code=…&state=…` |
-| `/api/cli/token` | POST | none (PKCE + grant) | `{code, code_verifier, redirect_uri}` | `{token, expires_at?, subject?}` |
-
-CLI side is wired; flip the bridge body once both routes ship.
+None as of this release. The CLI calls `POST {web_url}/api/cli/token`
+directly through `HttpServerBridge::fetch_token` and the wire contract
+on the CLI side is locked. The web origin's `/cli/authorize` and
+`/api/cli/token` endpoints are the deployment dependency tracked in
+tastile/tastile-web#153; until that lands, the CLI will surface a real
+HTTP / transport error from the bridge instead of a curl hand-off.
