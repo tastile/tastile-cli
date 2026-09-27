@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! ┌────────────────────────────────────────────────────────────┐
-//! │ tastile 0.1.0  api=https://api.tastile.app                │
+//! │ tastile 1.0.0  api=https://api.tastile.app                │
 //! │ ● Signed in (subject=u-1)                                  │
 //! ├──────────────────────────────────┬─────────────────────────┤
 //! │ Today's tiles                   │ Pending prompts          │
