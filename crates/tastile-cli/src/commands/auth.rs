@@ -1,4 +1,4 @@
-//! `tastile auth login | status | logout | exchange`.
+//! `tastile auth login | status | logout`.
 //!
 //! Implements the browser-mediated authorization grant protocol described in
 //! `tastile_auth::server_bridge`. The CLI does not touch the Better Auth
@@ -22,7 +22,6 @@ use url::Url;
 
 use crate::cli::{AuthArgs, AuthCommand};
 
-const REDIRECT_PATH: &str = "/cli/callback";
 const SCOPE: &str = "tastile.read tastile.write";
 
 pub async fn run(cfg: Config, args: AuthArgs) -> Result<ExitCode> {
@@ -33,7 +32,6 @@ pub async fn run(cfg: Config, args: AuthArgs) -> Result<ExitCode> {
         } => login(cfg, print_url, client_id).await,
         AuthCommand::Status => status(cfg).await,
         AuthCommand::Logout => logout(cfg).await,
-        AuthCommand::Exchange { code, state } => exchange(cfg, code, state).await,
     }
 }
 
@@ -186,39 +184,6 @@ async fn logout(cfg: Config) -> Result<ExitCode> {
         .delete(tastile_auth::DEFAULT_SERVICE, tastile_auth::DEFAULT_USER)
         .context("credential store delete failed")?;
     println!("✓ Local credential removed.");
-    Ok(ExitCode::SUCCESS)
-}
-
-async fn exchange(cfg: Config, code: String, _state: String) -> Result<ExitCode> {
-    let cfg = with_env_overrides(cfg);
-    let web_base = Url::parse(&cfg.web_url).context("invalid web_url in config")?;
-    let bridge = tastile_auth::HttpServerBridge::new();
-    // We don't have the verifier after the fact — pass empty. The server
-    // returns 400 invalid_grant (PKCE mismatch), which surfaces as an
-    // error to the operator.
-    let TokenExchangeResponse {
-        token,
-        expires_at,
-        subject,
-    } = bridge
-        .fetch_token(&web_base, &AuthorizationCode::new(code), "", REDIRECT_PATH)
-        .await
-        .context("token exchange failed")?;
-
-    let stored = tastile_auth::StoredToken::new(
-        cfg.api_url.clone(),
-        token,
-        parse_expires_at(expires_at.as_deref()),
-        subject,
-    );
-    KeyringStore
-        .save(
-            tastile_auth::DEFAULT_SERVICE,
-            tastile_auth::DEFAULT_USER,
-            &stored,
-        )
-        .context("could not save credential")?;
-    println!("✓ Bearer token saved to credential store.");
     Ok(ExitCode::SUCCESS)
 }
 
