@@ -88,11 +88,19 @@ fn ensure_local_target(cfg: &Config) -> Result<()> {
         url.host_str(),
         Some("localhost" | "127.0.0.1" | "::1" | "[::1]")
     );
-    if !is_local {
+    if !is_local || url.port() == Some(31400) {
         bail!(
-            "refusing to publish to non-loopback API {}; this local-first CLI \
-             cannot mutate a remote or operational schedule",
+            "refusing to publish to API {}; only an independently verified \
+             isolated loopback Core is eligible, and port 31400 belongs to \
+             the Muse operational Tastile stack",
             cfg.api_url
+        );
+    }
+    if std::env::var("TASTILE_ISOLATED_TEST_STACK").ok().as_deref() != Some("confirmed") {
+        bail!(
+            "no isolated test-stack confirmation: set \
+             TASTILE_ISOLATED_TEST_STACK=confirmed only after independently \
+             verifying a separate database, owner, port and notification sink"
         );
     }
     Ok(())
@@ -107,9 +115,13 @@ mod tests {
         let mut cfg = Config::default();
         assert!(ensure_local_target(&cfg).is_err());
         cfg.api_url = "http://127.0.0.1:31400".into();
-        assert!(ensure_local_target(&cfg).is_ok());
+        assert!(ensure_local_target(&cfg).is_err());
         cfg.api_url = "http://localhost:31400".into();
-        assert!(ensure_local_target(&cfg).is_ok());
+        assert!(ensure_local_target(&cfg).is_err());
+        // A dedicated non-operational port still requires an explicit
+        // isolated-stack confirmation, tested via the configured environment.
+        cfg.api_url = "http://127.0.0.1:31402".into();
+        assert!(ensure_local_target(&cfg).is_err());
         cfg.api_url = "http://192.168.1.2:31400".into();
         assert!(ensure_local_target(&cfg).is_err());
     }
