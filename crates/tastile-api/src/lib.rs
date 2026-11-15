@@ -42,6 +42,7 @@ pub mod error;
 pub mod executions;
 pub mod model;
 pub mod prompts;
+pub mod schedule;
 pub mod source_tiles;
 pub mod tiles;
 
@@ -57,6 +58,9 @@ pub use prompts::{
     PromptSubject, PromptView, RequestPromptRequest, ResolvePromptRequest, StartupRecoveryPayload,
     StartupRecoveryRequest, list_pending_prompts, request_prompt, resolve_prompt,
     respond_startup_recovery,
+};
+pub use schedule::{
+    PublishScheduleDefinitionRequest, publish_schedule_definition, validate_publish_payload,
 };
 pub use source_tiles::{
     CancelSourceTilePayload, CancelSourceTileRequest, CreateSourceScheduleDefinition,
