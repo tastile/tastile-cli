@@ -66,11 +66,13 @@ pub use source_tiles::{
     CancelSourceTilePayload, CancelSourceTileRequest, CreateSourceScheduleDefinition,
     CreateSourceTilePayload, CreateSourceTileRequest, PlacementTileRead, RecurrenceView,
     ReflowSourceTilePayload, ReflowSourceTileRequest, RelationDefinitionRead,
-    SchedulePlanDefinition, ScheduleTileDefinition, SourceOccurrenceRead, SourceScheduleDefinition,
-    SourceTileCompletion, SourceTileDetailRead, SourceTileRead, SourceTileSummary, Span,
-    TemporalView, UpdateSourceTilePayload, UpdateSourceTileRequest, cancel_source_tile,
-    create_source_tile, get_source_tile, get_source_tile_completion, list_source_tile_placements,
-    list_source_tiles, reflow_source_tile, update_source_tile,
+    SOURCE_TILE_PAGE_SIZE, SchedulePlanDefinition, ScheduleTileDefinition, SourceGeneration,
+    SourceOccurrenceRead, SourceScheduleDefinition, SourceSplitPolicy, SourceTileCompletion,
+    SourceTileDetailRead, SourceTileRead, SourceTileSummary, SourceWindow, Span, TemporalView,
+    UpdateSourceTilePayload, UpdateSourceTileRequest, cancel_source_tile, create_source_tile,
+    get_source_tile, get_source_tile_completion, list_all_source_tile_placements,
+    list_all_source_tiles, list_source_tile_placements, list_source_tiles, reflow_source_tile,
+    update_source_tile,
 };
 pub use tiles::list_tiles;
 

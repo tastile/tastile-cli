@@ -72,9 +72,15 @@ pub async fn start_execution(
 /// Spec: `components.schemas.ExecutionLifecycleRequest`. PAUSE / RESUME take
 /// no payload of their own — the execution id is in the path, and `payload`
 /// is `null`.
+///
+/// The `payload` field is always sent (as `null`), because the server
+/// deserializes the envelope with a required `payload` member: omitting it
+/// is rejected with `422`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ExecutionLifecycleRequest {
     pub idempotency_key: Uuid,
+    /// Always `null` (`CommandRequest<()>`).
+    pub payload: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurred_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,6 +91,7 @@ impl ExecutionLifecycleRequest {
     pub fn new() -> Self {
         Self {
             idempotency_key: Uuid::new_v4(),
+            payload: None,
             occurred_at: None,
             expected_revision: None,
         }
@@ -180,11 +187,11 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_request_has_no_payload_field() {
+    fn lifecycle_request_sends_the_contract_required_null_payload() {
         let req = ExecutionLifecycleRequest::new();
         let json = serde_json::to_value(&req).expect("serializes");
         assert!(json["idempotency_key"].is_string());
-        assert!(json.get("payload").is_none());
+        assert!(json["payload"].is_null());
     }
 
     #[test]

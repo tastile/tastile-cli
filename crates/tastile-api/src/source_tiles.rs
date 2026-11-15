@@ -75,24 +75,65 @@ pub struct SourceTileSummary {
     pub weekday_mask: Option<i32>,
 }
 
-/// Spec: `components.schemas.SourceScheduleDefinitionSchema` — opaque from
-/// the CLI's perspective. The CLI surfaces the schedule as JSON to the user.
+/// Spec: `components.schemas.SourceGenerationSchema`.
+///
+/// `kind` is the numeric generation kind: `0 = one-time`, `1 = recurring`.
+/// The remaining fields describe the recurrence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SourceScheduleDefinition {
-    /// Numeric identifier for the schedule variant.
+pub struct SourceGeneration {
     pub kind: i32,
     #[serde(default)]
-    pub rrule: Option<String>,
+    pub at: Option<DateTime<Utc>>,
     #[serde(default)]
-    pub window_start_min: Option<i32>,
+    pub starts_at: Option<DateTime<Utc>>,
     #[serde(default)]
-    pub window_end_min: Option<i32>,
+    pub interval_ms: Option<i64>,
     #[serde(default)]
-    pub step_min: Option<i32>,
+    pub ends_at: Option<DateTime<Utc>>,
     #[serde(default)]
-    pub anchor_at: Option<DateTime<Utc>>,
+    pub weekday_mask: Option<i32>,
     #[serde(default)]
-    pub expression: Option<String>,
+    pub date_range_start: Option<String>,
+    #[serde(default)]
+    pub date_range_end: Option<String>,
+    #[serde(default)]
+    pub excluded_dates: Vec<String>,
+    /// Local calendar offset in minutes east of UTC.
+    #[serde(default)]
+    pub offset_min: Option<i32>,
+}
+
+/// Spec: `components.schemas.SourceWindowSchema` — the placement window
+/// relative to the nominal time. The server requires
+/// `start_offset_ms < end_offset_ms`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceWindow {
+    pub start_offset_ms: i64,
+    pub end_offset_ms: i64,
+}
+
+/// Spec: `components.schemas.SplitPolicySchema`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceSplitPolicy {
+    /// `0 = unsplit`, `1 = split`.
+    pub kind: i32,
+    #[serde(default)]
+    pub min_segment_ms: Option<i64>,
+    #[serde(default)]
+    pub max_segment_ms: Option<i64>,
+    #[serde(default)]
+    pub max_segments: Option<i32>,
+}
+
+/// Spec: `components.schemas.SourceScheduleDefinitionSchema` — the schedule
+/// as the server stores and returns it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceScheduleDefinition {
+    pub required_duration_ms: i64,
+    pub generation: SourceGeneration,
+    pub window: SourceWindow,
+    pub split_policy: SourceSplitPolicy,
+    pub priority: i32,
 }
 
 /// Spec: `components.schemas.SourceTileRead`.
@@ -164,9 +205,9 @@ pub struct SourceTileDetailRead {
 #[derive(Debug, Default, Clone)]
 pub struct ListSourceTilesQuery {
     pub owner_id: Option<Uuid>,
-    pub plan_id: Option<Uuid>,
-    pub state: Option<i32>,
     pub limit: Option<u32>,
+    /// Rows to skip. The server defaults to `0` and caps `limit` at 500.
+    pub offset: Option<u32>,
 }
 
 impl ListSourceTilesQuery {
@@ -175,17 +216,38 @@ impl ListSourceTilesQuery {
         if let Some(v) = self.owner_id {
             out.push(("owner_id", v.to_string()));
         }
-        if let Some(v) = self.plan_id {
-            out.push(("plan_id", v.to_string()));
-        }
-        if let Some(v) = self.state {
-            out.push(("state", v.to_string()));
-        }
         if let Some(v) = self.limit {
             out.push(("limit", v.to_string()));
         }
+        if let Some(v) = self.offset {
+            out.push(("offset", v.to_string()));
+        }
         out
     }
+}
+
+/// Largest page the pinned contract allows for the source-tile listings
+/// (`limit` is documented as `1..500`).
+pub const SOURCE_TILE_PAGE_SIZE: u32 = 500;
+
+/// Advance to the next page while respecting the OpenAPI `int32` offset.
+fn next_page_offset(offset: u32, page_len: usize) -> ApiResult<u32> {
+    let page_len = u32::try_from(page_len).map_err(|_| {
+        crate::error::ApiError::Pagination(
+            "source-tile pagination page length exceeds the contract limit".into(),
+        )
+    })?;
+    let next = offset.checked_add(page_len).ok_or_else(|| {
+        crate::error::ApiError::Pagination(
+            "source-tile pagination offset exceeded the contract limit".into(),
+        )
+    })?;
+    if next > i32::MAX as u32 {
+        return Err(crate::error::ApiError::Pagination(
+            "source-tile pagination offset exceeded the contract int32 limit".into(),
+        ));
+    }
+    Ok(next)
 }
 
 /// `GET /v1/source-tiles` → `operationId: list_source_tiles`.
@@ -199,14 +261,78 @@ pub async fn list_source_tiles(
         .await
 }
 
+/// Fetch **every** source tile of the owner by walking the documented
+/// `limit` / `offset` pagination.
+///
+/// The server applies its own default page size (100 rows) when `limit` is
+/// omitted, so a single request silently truncates large owners. This
+/// helper keeps requesting pages until a short page proves the end of the
+/// result set.
+pub async fn list_all_source_tiles(
+    client: &ApiClient,
+    token: &BearerToken,
+    q: &ListSourceTilesQuery,
+) -> ApiResult<Vec<SourceTileRead>> {
+    let mut out: Vec<SourceTileRead> = Vec::new();
+    let mut offset: u32 = 0;
+    loop {
+        let page_query = ListSourceTilesQuery {
+            limit: Some(SOURCE_TILE_PAGE_SIZE),
+            offset: Some(offset),
+            ..q.clone()
+        };
+        let page = list_source_tiles(client, token, &page_query).await?;
+        let page_len = page.len();
+        out.extend(page);
+        if page_len < SOURCE_TILE_PAGE_SIZE as usize {
+            return Ok(out);
+        }
+        offset = next_page_offset(offset, page_len)?;
+    }
+}
+
 /// `GET /v1/source-tiles/{id}` → `operationId: get_source_tile`.
 pub async fn get_source_tile(
     client: &ApiClient,
     token: &BearerToken,
     id: Uuid,
 ) -> ApiResult<SourceTileDetailRead> {
+    let mut combined: Option<SourceTileDetailRead> = None;
+    let mut offset = 0_u32;
+    loop {
+        let page = get_source_tile_page(client, token, id, SOURCE_TILE_PAGE_SIZE, offset).await?;
+        let occurrence_count = page.occurrences.len();
+        let placement_count = page.placements.len();
+        if let Some(detail) = combined.as_mut() {
+            detail.occurrences.extend(page.occurrences);
+            detail.placements.extend(page.placements);
+        } else {
+            combined = Some(page);
+        }
+        if occurrence_count < SOURCE_TILE_PAGE_SIZE as usize
+            && placement_count < SOURCE_TILE_PAGE_SIZE as usize
+        {
+            return Ok(combined.expect("a page was fetched"));
+        }
+        offset = next_page_offset(offset, SOURCE_TILE_PAGE_SIZE as usize)?;
+    }
+}
+
+async fn get_source_tile_page(
+    client: &ApiClient,
+    token: &BearerToken,
+    id: Uuid,
+    limit: u32,
+    offset: u32,
+) -> ApiResult<SourceTileDetailRead> {
     let path = format!("/v1/source-tiles/{id}");
-    client.get_json(token, &path, &[]).await
+    client
+        .get_json(
+            token,
+            &path,
+            &[("limit", limit.to_string()), ("offset", offset.to_string())],
+        )
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -225,22 +351,36 @@ pub struct CancelSourceTileRequest {
 }
 
 /// Spec: `components.schemas.CancelSourceTilePayloadSchema`.
+///
+/// The wire value is a **numeric** cancel-reason registry code, not free
+/// text: the schema declares `reason` as `integer / int32` and points at
+/// the server-side `domain::source_tile::state::cancel_reason` registry.
+/// A JSON string is rejected by the server, so the CLI keeps the payload
+/// numeric.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CancelSourceTilePayload {
-    pub reason: String,
+    pub reason: i32,
 }
 
 impl CancelSourceTileRequest {
     /// Build a request with a freshly-generated idempotency key.
-    pub fn new(reason: impl Into<String>) -> Self {
+    ///
+    /// `reason` is the numeric cancel-reason registry code.
+    pub fn new(reason: i32) -> Self {
         Self {
             idempotency_key: Uuid::new_v4(),
-            payload: CancelSourceTilePayload {
-                reason: reason.into(),
-            },
+            payload: CancelSourceTilePayload { reason },
             occurred_at: None,
             expected_revision: None,
         }
+    }
+
+    /// Attach the source-tile revision the caller expects to still be
+    /// current. The server answers `409` when the stored revision moved on.
+    #[must_use]
+    pub fn with_expected_revision(mut self, revision: i64) -> Self {
+        self.expected_revision = Some(revision);
+        self
     }
 }
 
@@ -263,13 +403,13 @@ pub async fn cancel_source_tile(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScheduleTileDefinition {
     pub title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub color: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub icon: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub external_id: Option<String>,
 }
 
@@ -386,6 +526,14 @@ impl UpdateSourceTileRequest {
             expected_revision: None,
         }
     }
+
+    /// Attach the source-tile revision the caller expects to still be
+    /// current. The server answers `409` when the stored revision moved on.
+    #[must_use]
+    pub fn with_expected_revision(mut self, revision: i64) -> Self {
+        self.expected_revision = Some(revision);
+        self
+    }
 }
 
 /// `PUT /v1/source-tiles/{id}` → `operationId: update_source_tile`.
@@ -427,13 +575,44 @@ pub async fn list_source_tile_placements(
     token: &BearerToken,
     id: Uuid,
     limit: Option<u32>,
+    offset: Option<u32>,
 ) -> ApiResult<Vec<PlacementTileRead>> {
     let path = format!("/v1/source-tiles/{id}/placements");
     let mut pairs: Vec<(&'static str, String)> = Vec::new();
     if let Some(l) = limit {
         pairs.push(("limit", l.to_string()));
     }
+    if let Some(o) = offset {
+        pairs.push(("offset", o.to_string()));
+    }
     client.get_json(token, &path, &pairs).await
+}
+
+/// Fetch **every** placement of a source tile by walking the documented
+/// `limit` / `offset` pagination.
+pub async fn list_all_source_tile_placements(
+    client: &ApiClient,
+    token: &BearerToken,
+    id: Uuid,
+) -> ApiResult<Vec<PlacementTileRead>> {
+    let mut out: Vec<PlacementTileRead> = Vec::new();
+    let mut offset: u32 = 0;
+    loop {
+        let page = list_source_tile_placements(
+            client,
+            token,
+            id,
+            Some(SOURCE_TILE_PAGE_SIZE),
+            Some(offset),
+        )
+        .await?;
+        let page_len = page.len();
+        out.extend(page);
+        if page_len < SOURCE_TILE_PAGE_SIZE as usize {
+            return Ok(out);
+        }
+        offset = next_page_offset(offset, page_len)?;
+    }
 }
 
 /// Spec: `components.schemas.ReflowSourceTilePayloadSchema`.
@@ -462,6 +641,14 @@ impl ReflowSourceTileRequest {
             expected_revision: None,
         }
     }
+
+    /// Attach the source-tile revision the caller expects to still be
+    /// current. The server answers `409` when the stored revision moved on.
+    #[must_use]
+    pub fn with_expected_revision(mut self, revision: i64) -> Self {
+        self.expected_revision = Some(revision);
+        self
+    }
 }
 
 /// `POST /v1/source-tiles/{id}/reflow` → `operationId: reflow_source_tile`.
@@ -480,11 +667,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cancel_request_serializes_payload() {
-        let req = CancelSourceTileRequest::new("user-requested");
+    fn pagination_offset_stops_at_the_contract_int32_limit() {
+        assert_eq!(next_page_offset(500, 500).unwrap(), 1_000);
+        assert!(next_page_offset(i32::MAX as u32, 500).is_err());
+    }
+
+    #[test]
+    fn cancel_request_serializes_numeric_payload() {
+        let req = CancelSourceTileRequest::new(0);
         let json = serde_json::to_value(&req).expect("serializes");
         assert!(json["idempotency_key"].is_string());
-        assert_eq!(json["payload"]["reason"], "user-requested");
+        assert_eq!(json["payload"]["reason"], 0);
+    }
+
+    #[test]
+    fn expected_revision_is_carried_on_the_envelope() {
+        let req = CancelSourceTileRequest::new(0).with_expected_revision(7);
+        let json = serde_json::to_value(&req).expect("serializes");
+        assert_eq!(json["expected_revision"], 7);
     }
 
     #[test]
@@ -497,7 +697,13 @@ mod tests {
             "source_state": 0,
             "title": "demo",
             "plan_role": 0,
-            "schedule": {"kind": 0},
+            "schedule": {
+                "required_duration_ms": 1800000,
+                "generation": {"kind": 0, "at": "2026-09-19T09:00:00Z"},
+                "window": {"start_offset_ms": 0, "end_offset_ms": 14400000},
+                "split_policy": {"kind": 0},
+                "priority": 0
+            },
             "created_at": "2026-09-19T00:00:00Z",
             "updated_at": "2026-09-19T00:00:00Z"
         });

@@ -69,7 +69,7 @@
 //! When the server-side routes ship, replace the body of `exchange` and
 //! `HttpServerBridge::fetch_token` with the real HTTP call.
 
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -113,7 +113,7 @@ pub struct TokenExchangeRequest<'a> {
 /// Successful response from `POST /api/cli/token`.
 ///
 /// The bearer token is opaque to the CLI; we never log or print it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct TokenExchangeResponse {
     pub token: String,
     /// ISO-8601 timestamp. Optional because not every server includes it.
@@ -122,6 +122,16 @@ pub struct TokenExchangeResponse {
     /// Optional subject identifier (e.g. user id) for display only.
     #[serde(default)]
     pub subject: Option<String>,
+}
+
+impl fmt::Debug for TokenExchangeResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenExchangeResponse")
+            .field("token", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .field("subject", &self.subject)
+            .finish()
+    }
 }
 
 /// Errors that the CLI bridge can surface.
@@ -332,6 +342,15 @@ mod tests {
         let r: TokenExchangeResponse = serde_json::from_str(json).unwrap();
         assert_eq!(r.token, "secret");
         assert_eq!(r.subject.as_deref(), Some("u-1"));
+    }
+
+    #[test]
+    fn token_exchange_response_debug_redacts_the_bearer() {
+        let r: TokenExchangeResponse =
+            serde_json::from_str(r#"{"token":"do-not-print-this-token"}"#).unwrap();
+        let debug = format!("{r:?}");
+        assert!(!debug.contains("do-not-print-this-token"));
+        assert!(debug.contains("[REDACTED]"));
     }
 
     #[test]

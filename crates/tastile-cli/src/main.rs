@@ -19,6 +19,8 @@ mod app;
 mod cli;
 mod commands;
 mod output;
+mod safety;
+mod simple_input;
 mod tracing_init;
 mod tui;
 
@@ -46,7 +48,10 @@ fn main() -> ExitCode {
     match result {
         Ok(code) => code,
         Err(e) => {
-            error!("{e}");
+            // `{e:#}` prints the whole anyhow chain, so the operator sees the
+            // root cause (for example the credential-store backend error)
+            // instead of only the outer context.
+            error!("{e:#}");
             ExitCode::FAILURE
         }
     }

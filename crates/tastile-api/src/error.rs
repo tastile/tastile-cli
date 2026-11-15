@@ -34,6 +34,10 @@ pub enum ApiError {
     #[error("invalid base url: {0}")]
     InvalidBaseUrl(String),
 
+    /// The documented API pagination could not advance any further.
+    #[error("pagination: {0}")]
+    Pagination(String),
+
     /// Operation requested after the configured timeout elapsed.
     #[error("timeout after {0:?}")]
     Timeout(Duration),

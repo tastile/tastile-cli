@@ -38,6 +38,14 @@ impl PublishScheduleDefinitionRequest {
             owner_id: None,
         })
     }
+
+    /// Attach the revision the caller expects to still be current. The
+    /// server answers `409` when the stored revision moved on.
+    #[must_use]
+    pub fn with_expected_revision(mut self, revision: i64) -> Self {
+        self.expected_revision = Some(revision);
+        self
+    }
 }
 
 /// Validate the required OpenAPI shape without pretending to implement Core's
@@ -63,7 +71,9 @@ pub fn validate_publish_payload(payload: &Value) -> Result<(), String> {
     ];
     for key in obj.keys() {
         if !allowed.contains(&key.as_str()) {
-            return Err(format!("unknown schedule payload field `{key}` (refusing to ignore it)"));
+            return Err(format!(
+                "unknown schedule payload field `{key}` (refusing to ignore it)"
+            ));
         }
     }
     let tile = obj
@@ -80,10 +90,48 @@ pub fn validate_publish_payload(payload: &Value) -> Result<(), String> {
     if !obj.get("plan").is_some_and(Value::is_object) {
         return Err("schedule payload requires object field `plan`".into());
     }
+    // `SchedulePlanDefinitionSchema` requires the plan to carry the whole
+    // plan body; the server rejects a partial plan.
+    let plan = obj
+        .get("plan")
+        .and_then(Value::as_object)
+        .expect("checked above");
+    for (key, kind) in [
+        ("references", "array"),
+        ("metrics", "array"),
+        ("decisions", "array"),
+        ("completion", "object"),
+        ("planning", "object"),
+    ] {
+        let present = plan.get(key).is_some_and(|value| match kind {
+            "array" => value.is_array(),
+            _ => value.is_object(),
+        });
+        if !present {
+            return Err(format!(
+                "schedule payload requires plan field `{key}` ({kind})"
+            ));
+        }
+    }
     for key in ["reference_targets", "windows", "flows"] {
         if !obj.get(key).is_some_and(Value::is_array) {
             return Err(format!("schedule payload requires array field `{key}`"));
         }
+    }
+    let linked_source_fields = [
+        "source_client_local_id",
+        "source_schedule",
+        "source_horizon",
+    ];
+    let present: Vec<bool> = linked_source_fields
+        .iter()
+        .map(|field| obj.get(*field).is_some_and(|value| !value.is_null()))
+        .collect();
+    if present.iter().any(|value| *value) && present.iter().any(|value| !*value) {
+        return Err(
+            "Core requires `source_client_local_id`, `source_schedule`, and `source_horizon` together"
+                .into(),
+        );
     }
     Ok(())
 }
@@ -94,7 +142,9 @@ pub async fn publish_schedule_definition(
     token: &BearerToken,
     request: &PublishScheduleDefinitionRequest,
 ) -> ApiResult<CommandResponse> {
-    client.post_json(token, "/v1/schedule-definitions", request).await
+    client
+        .post_json(token, "/v1/schedule-definitions", request)
+        .await
 }
 
 #[cfg(test)]
@@ -105,7 +155,14 @@ mod tests {
     fn valid_payload() -> Value {
         json!({
             "tile": {"title": "Local test"},
-            "plan": {},
+            "plan": {
+                "role": 0,
+                "references": [],
+                "completion": {"root": {"All": []}, "tasks": [], "time_requirements": []},
+                "planning": {"placement_rules": [], "nesting_rules": []},
+                "metrics": [],
+                "decisions": []
+            },
             "reference_targets": [],
             "windows": [],
             "flows": []
@@ -121,10 +178,43 @@ mod tests {
     fn fails_closed_on_misspelled_monthly_rule_or_missing_fields() {
         let mut p = valid_payload();
         p["monthy_rule"] = json!({"by_day": {"day_of_month": 15}});
-        assert!(validate_publish_payload(&p).unwrap_err().contains("monthy_rule"));
+        assert!(
+            validate_publish_payload(&p)
+                .unwrap_err()
+                .contains("monthy_rule")
+        );
         p.as_object_mut().unwrap().remove("monthy_rule");
         p.as_object_mut().unwrap().remove("windows");
-        assert!(validate_publish_payload(&p).unwrap_err().contains("windows"));
+        assert!(
+            validate_publish_payload(&p)
+                .unwrap_err()
+                .contains("windows")
+        );
+    }
+
+    #[test]
+    fn fails_closed_on_an_incomplete_plan() {
+        let mut p = valid_payload();
+        p["plan"]
+            .as_object_mut()
+            .expect("plan object")
+            .remove("references");
+        assert!(
+            validate_publish_payload(&p)
+                .unwrap_err()
+                .contains("references")
+        );
+    }
+
+    #[test]
+    fn source_definition_fields_must_be_supplied_together() {
+        let mut p = valid_payload();
+        p["source_schedule"] = json!({"generation": {"kind": 0}});
+        assert!(
+            validate_publish_payload(&p).unwrap_err().contains(
+                "source_client_local_id`, `source_schedule`, and `source_horizon` together"
+            )
+        );
     }
 
     #[test]

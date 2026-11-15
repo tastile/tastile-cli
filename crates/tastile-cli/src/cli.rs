@@ -91,15 +91,21 @@ pub struct TilesArgs {
     /// Output JSON instead of the human-readable table.
     #[arg(long)]
     pub json: bool,
-    /// Restrict to a single plan.
-    #[arg(long, value_name = "UUID")]
-    pub plan: Option<uuid::Uuid>,
-    /// Include closed/done tiles.
-    #[arg(long)]
-    pub include_closed: bool,
+    /// Lifecycle filter: `ready`, `started`, `done` or `closed`.
+    #[arg(long, value_name = "STATE", value_parser = ["ready", "started", "done", "closed"])]
+    pub lifecycle: Option<String>,
+    /// Free-text search across title, description and labels.
+    #[arg(long, value_name = "TEXT")]
+    pub search: Option<String>,
+    /// View mode: `flat` (default) or `by_state`.
+    #[arg(long, value_name = "MODE", value_parser = ["flat", "by_state"])]
+    pub view_mode: Option<String>,
+    /// Maximum number of rows to request.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<i64>,
     /// Show only the next actionable tile (the one with the earliest
     /// `projected_next_start_at`).
-    #[arg(long, conflicts_with = "include_closed")]
+    #[arg(long, conflicts_with = "lifecycle")]
     pub next: bool,
 }
 
@@ -136,6 +142,9 @@ pub enum ScheduleCommand {
         /// Stable idempotency key to safely retry after an uncertain response.
         #[arg(long, value_name = "UUID")]
         idempotency_key: Option<uuid::Uuid>,
+        /// Reject the publish unless the target is still at this revision.
+        #[arg(long, value_name = "N")]
+        expect_revision: Option<i64>,
     },
 }
 
@@ -151,8 +160,6 @@ pub enum SourceTilesCommand {
     List {
         #[arg(long)]
         json: bool,
-        #[arg(long, value_name = "UUID")]
-        plan: Option<uuid::Uuid>,
     },
     /// Create a new source tile from a draft (interactive prompts or
     /// `--from-json` for non-interactive use).
@@ -164,6 +171,69 @@ pub enum SourceTilesCommand {
         /// Shortcut: create with just a title and 30-day horizon.
         #[arg(long, value_name = "TITLE", conflicts_with = "from_json")]
         title: Option<String>,
+        /// One-time occurrence at an exact instant (RFC 3339).
+        #[arg(long, value_name = "RFC3339", conflicts_with_all = ["from_json", "daily", "weekly"])]
+        once: Option<String>,
+        /// Daily recurrence at a local wall time (HH:MM).
+        #[arg(long, value_name = "HH:MM", conflicts_with_all = ["from_json", "once", "weekly"])]
+        daily: Option<String>,
+        /// Weekly recurrence at a local wall time (HH:MM).
+        #[arg(long, value_name = "HH:MM", conflicts_with_all = ["from_json", "once", "daily"])]
+        weekly: Option<String>,
+        /// Weekdays for `--weekly`, e.g. `mon,wed,fri`.
+        #[arg(
+            long,
+            value_name = "DAYS",
+            requires = "weekly",
+            conflicts_with = "daily"
+        )]
+        days: Option<String>,
+        /// Anchor date for `--daily` / `--weekly` (YYYY-MM-DD, local).
+        #[arg(long, value_name = "DATE", conflicts_with = "from_json")]
+        start_date: Option<String>,
+        /// Fixed local calendar offset in minutes east of UTC (default 0; 540 = Asia/Tokyo).
+        #[arg(long, value_name = "MINUTES", conflicts_with = "from_json")]
+        utc_offset: Option<i32>,
+        /// Excluded local calendar dates (repeatable, YYYY-MM-DD).
+        #[arg(long, value_name = "DATE", conflicts_with = "from_json")]
+        exclude: Vec<String>,
+        /// Required duration in minutes.
+        #[arg(
+            long,
+            value_name = "MINUTES",
+            default_value = "30",
+            conflicts_with = "from_json"
+        )]
+        duration: i64,
+        /// Placement window in minutes: how long after its nominal time an
+        /// occurrence may still be placed.
+        #[arg(
+            long,
+            value_name = "MINUTES",
+            default_value = "240",
+            conflicts_with = "from_json"
+        )]
+        window_minutes: i64,
+        /// Horizon length in days.
+        #[arg(
+            long,
+            value_name = "DAYS",
+            default_value = "30",
+            conflicts_with = "from_json"
+        )]
+        horizon_days: i64,
+        /// Placement priority (higher wins a contended slot).
+        #[arg(
+            long,
+            value_name = "N",
+            default_value = "0",
+            conflicts_with = "from_json"
+        )]
+        priority: i32,
+        /// Request a monthly recurrence (not expressible in the pinned
+        /// contract; the command refuses instead of approximating it).
+        #[arg(long, conflicts_with_all = ["from_json", "once", "daily", "weekly"])]
+        monthly: bool,
     },
     /// Show a single source tile by id.
     Get {
@@ -176,12 +246,25 @@ pub enum SourceTilesCommand {
         id: uuid::Uuid,
         #[arg(long, value_name = "PATH")]
         from_json: Option<String>,
+        /// Show the field-level diff against the stored source tile and stop.
+        #[arg(long)]
+        dry_run: bool,
+        /// Reject the write unless the source tile is still at this revision.
+        #[arg(long, value_name = "N")]
+        expect_revision: Option<i64>,
     },
     /// Cancel a source tile.
     Cancel {
         id: uuid::Uuid,
-        #[arg(long, default_value = "user-requested")]
-        reason: String,
+        /// Numeric cancel-reason registry code (0 = user-requested).
+        #[arg(long, value_name = "CODE", default_value = "0")]
+        reason_code: i32,
+        /// Show the affected placements and stop.
+        #[arg(long)]
+        dry_run: bool,
+        /// Reject the write unless the source tile is still at this revision.
+        #[arg(long, value_name = "N")]
+        expect_revision: Option<i64>,
     },
     /// Re-derive the per-segment / per-occurrence completion for a source tile.
     Completion {
@@ -204,6 +287,12 @@ pub enum SourceTilesCommand {
         /// End of the reflow range (RFC 3339).
         #[arg(long)]
         to: chrono::DateTime<chrono::Utc>,
+        /// Show the affected placements and stop.
+        #[arg(long)]
+        dry_run: bool,
+        /// Reject the write unless the source tile is still at this revision.
+        #[arg(long, value_name = "N")]
+        expect_revision: Option<i64>,
     },
 }
 

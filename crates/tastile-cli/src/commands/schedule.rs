@@ -12,7 +12,6 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use tastile_api::{PublishScheduleDefinitionRequest, publish_schedule_definition};
 use tastile_config::{Config, with_env_overrides};
-use url::Url;
 use uuid::Uuid;
 
 use crate::app::AppContext;
@@ -32,7 +31,8 @@ pub async fn run(cfg: Config, args: ScheduleArgs) -> Result<ExitCode> {
             from_json,
             apply,
             idempotency_key,
-        } => publish(cfg, &from_json, apply, idempotency_key).await,
+            expect_revision,
+        } => publish(cfg, &from_json, apply, idempotency_key, expect_revision).await,
     }
 }
 
@@ -41,14 +41,16 @@ async fn publish(
     from_json: &str,
     apply: bool,
     idempotency_key: Option<Uuid>,
+    expect_revision: Option<i64>,
 ) -> Result<ExitCode> {
+    let idempotency_key = resolve_idempotency_key(apply, idempotency_key)?;
     let payload = load_payload(from_json)?;
-    let request = PublishScheduleDefinitionRequest::new(
-        payload,
-        idempotency_key.unwrap_or_else(Uuid::new_v4),
-    )
-    .map_err(anyhow::Error::msg)
-    .context("invalid schedule payload")?;
+    let mut request = PublishScheduleDefinitionRequest::new(payload, idempotency_key)
+        .map_err(anyhow::Error::msg)
+        .context("invalid schedule payload")?;
+    if let Some(revision) = expect_revision {
+        request = request.with_expected_revision(revision);
+    }
     if !apply {
         // Preview without auth, credential store, network, or database.
         println!("{}", serde_json::to_string_pretty(&request)?);
@@ -60,13 +62,25 @@ async fn publish(
     }
 
     let cfg = with_env_overrides(cfg);
-    ensure_local_target(&cfg)?;
     let ctx = AppContext::load(cfg)?;
+    // The write gate classifies the target and proves it answers as a
+    // Tastile v1 API before the publish leaves the process.
+    crate::app::guard_schedule_publish_write(&ctx).await?;
     let response = publish_schedule_definition(&ctx.api, ctx.require_token()?, &request)
         .await
         .context("schedule publish failed; retry with the same --idempotency-key")?;
     output::print_command_response(&response);
     Ok(ExitCode::SUCCESS)
+}
+
+fn resolve_idempotency_key(apply: bool, idempotency_key: Option<Uuid>) -> Result<Uuid> {
+    match (apply, idempotency_key) {
+        (true, None) => bail!(
+            "schedule publish --apply requires --idempotency-key UUID so an uncertain result can be retried safely"
+        ),
+        (_, Some(key)) => Ok(key),
+        (false, None) => Ok(Uuid::new_v4()),
+    }
 }
 
 fn load_payload(path: &str) -> Result<Value> {
@@ -77,54 +91,15 @@ fn load_payload(path: &str) -> Result<Value> {
             .context("reading schedule payload from standard input")?;
         buf
     } else {
-        fs::read_to_string(path).with_context(|| format!("reading schedule payload from `{path}`"))?
+        fs::read_to_string(path)
+            .with_context(|| format!("reading schedule payload from `{path}`"))?
     };
     serde_json::from_str(&text).context("schedule payload must be valid JSON")
-}
-
-fn ensure_local_target(cfg: &Config) -> Result<()> {
-    let url = Url::parse(&cfg.api_url).context("invalid configured API URL")?;
-    let is_local = matches!(
-        url.host_str(),
-        Some("localhost" | "127.0.0.1" | "::1" | "[::1]")
-    );
-    if !is_local || url.port() == Some(31400) {
-        bail!(
-            "refusing to publish to API {}; only an independently verified \
-             isolated loopback Core is eligible, and port 31400 belongs to \
-             the Muse operational Tastile stack",
-            cfg.api_url
-        );
-    }
-    if std::env::var("TASTILE_ISOLATED_TEST_STACK").ok().as_deref() != Some("confirmed") {
-        bail!(
-            "no isolated test-stack confirmation: set \
-             TASTILE_ISOLATED_TEST_STACK=confirmed only after independently \
-             verifying a separate database, owner, port and notification sink"
-        );
-    }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn preview_target_gate_is_local_only() {
-        let mut cfg = Config::default();
-        assert!(ensure_local_target(&cfg).is_err());
-        cfg.api_url = "http://127.0.0.1:31400".into();
-        assert!(ensure_local_target(&cfg).is_err());
-        cfg.api_url = "http://localhost:31400".into();
-        assert!(ensure_local_target(&cfg).is_err());
-        // A dedicated non-operational port still requires an explicit
-        // isolated-stack confirmation, tested via the configured environment.
-        cfg.api_url = "http://127.0.0.1:31402".into();
-        assert!(ensure_local_target(&cfg).is_err());
-        cfg.api_url = "http://192.168.1.2:31400".into();
-        assert!(ensure_local_target(&cfg).is_err());
-    }
 
     #[test]
     fn invalid_input_stops_before_network() {
@@ -133,5 +108,25 @@ mod tests {
             Uuid::new_v4(),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn publish_never_targets_the_operational_port() {
+        // The write gate is shared with every other mutating command and
+        // refuses the reserved operational port outright.
+        let mut cfg = Config::default();
+        cfg.api_url = "http://127.0.0.1:31400".into();
+        assert!(
+            crate::safety::classify_write_target(&cfg, true).is_err(),
+            "the operational port must never accept a write"
+        );
+    }
+
+    #[test]
+    fn apply_requires_a_reusable_idempotency_key() {
+        assert!(resolve_idempotency_key(true, None).is_err());
+        let key = Uuid::new_v4();
+        assert_eq!(resolve_idempotency_key(true, Some(key)).unwrap(), key);
+        assert!(resolve_idempotency_key(false, None).is_ok());
     }
 }

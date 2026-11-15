@@ -52,18 +52,18 @@ cargo build --release
 | `tastile` (no args) | Launch the TUI. |
 | `tastile auth login` | Browser-based PKCE authorization (loopback callback). |
 | `tastile auth status` | Show whether a bearer token is stored. |
-| `tastile auth logout` | Drop the local token and revoke server-side. |
+| `tastile auth logout` | Remove the local token; attempt guarded server-side revocation. |
 | `tastile doctor` | Diagnostics: toolchain, credential store, API reachability. |
 | `tastile today` | Show the next actionable tile for today. |
 | `tastile tiles` | List tiles in the current day window. |
-| `tastile source-tiles list` | List source tiles. |
-| `tastile source-tiles get <id>` | Show one source tile + its placements. |
-| `tastile source-tiles create --title …` | Create a source tile from a draft (or `--from-json`). |
-| `tastile source-tiles update <id> --from-json` | Update a source tile. |
-| `tastile source-tiles cancel <id>` | Cancel a source tile. |
+| `tastile source-tiles list` | List every source tile (paginated; no silent 100-row cap). |
+| `tastile source-tiles get <id>` | Show one source tile + every occurrence and placement (paginated). |
+| `tastile source-tiles create --title … --once/--daily/--weekly` | Create a source tile from a short recurrence description (or `--from-json`). |
+| `tastile source-tiles update <id> --from-json` | Full replacement update; requires the complete payload (`--dry-run` compares visible fields, `--expect-revision` detects conflicts). |
+| `tastile source-tiles cancel <id>` | Cancel a source tile (`--dry-run` shows the affected placements). |
 | `tastile source-tiles completion <id>` | Show the completion plan tree. |
-| `tastile source-tiles placements <id>` | List placements of a source tile. |
-| `tastile source-tiles reflow <id> --from … --to …` | Re-flow placements within a window. |
+| `tastile source-tiles placements <id>` | List every placement of a source tile (paginated). |
+| `tastile source-tiles reflow <id> --from … --to …` | Re-flow placements within a window (`--dry-run` shows the scope). |
 | `tastile executions start <placement-id>` | Start an execution. |
 | `tastile executions pause <execution-id>` | Pause an execution. |
 | `tastile executions resume <execution-id>` | Resume an execution. |
@@ -92,6 +92,10 @@ such as `source_schedule`, `source_horizon` and `recurrence` must follow
 the pinned OpenAPI and Core version. A CLI preview does not mean the payload
 is schedulable; check Core read-back and materialized placements before
 considering any success.
+For source-backed publishes, Core requires `source_client_local_id`,
+`source_schedule` and `source_horizon` together, and rejects empty or
+invalid completion conditions. Offline preview does not prove these
+server-side semantics.
 
 ```sh
 # Validate the required payload envelope completely offline.
@@ -105,7 +109,7 @@ TASTILE_API_URL=http://127.0.0.1:31402 \
   --idempotency-key <stable-uuid>
 ```
 
-The `--idempotency-key` is optional for a first request but **must be reused**
+The `--idempotency-key` is required for `--apply` and **must be reused**
 for an uncertain retry. An omitted `--apply` never opens the credential store
 or network. Non-loopback `--apply`, operational port 31400, and missing isolated-stack
 confirmation all fail closed. The confirmation flag is an operator safeguard,
@@ -115,6 +119,32 @@ subcommand now returns an error rather than claiming to have regenerated.
 
 See [CLI acceptance and Muse shadow matrix](./docs/local-first-acceptance.md)
 for the outstanding integration checks.
+
+## Write-target safety (all mutating commands)
+
+The same gate protects **every** write, not only `schedule publish`:
+
+| Target | Decision |
+| --- | --- |
+| Loopback on port 31400 | Refused — the Muse operational stack owns that port. |
+| Any other loopback target | Allowed only with `TASTILE_ISOLATED_TEST_STACK=confirmed`. |
+| Remote `http://` | Refused — remote API bases must use HTTPS for reads and writes. |
+| Remote `https://` | Allowed for ordinary API writes when explicitly configured; `schedule publish --apply` remains loopback-only. |
+
+Before a write leaves the process, the CLI also probes the target with a
+documented read endpoint (`GET /v1/source-tiles`) and requires the stored
+credential to be accepted. Every authenticated request checks that the
+stored credential was issued for the configured API base and is not expired.
+The pinned contract has
+no `whoami` or version operation, so the probe cannot independently identify
+the owner or prove the stack is isolated; only the operator can attest isolation.
+
+See [docs/cli-operations.md](./docs/cli-operations.md) for the full
+operation guide, expected error messages and a safe stop/resume procedure.
+The pinned `GET /v1/tiles` and pending-prompt list endpoints have no offset
+or cursor, so those views make one request and cannot guarantee completeness
+if Core applies a result cap. Source-tile lists, details and placements use
+the documented `limit` / `offset` pagination.
 
 ## Architecture
 

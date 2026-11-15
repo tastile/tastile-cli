@@ -6,6 +6,119 @@ Evidence baseline: Muse operational inventory, 2026-11-15 10:31 JST,
 reported to a private shared document. Metrics below are **Muse's reported
 observations**, not independently verified in this repository.
 
+## Contract gaps found while verifying the CLI (2026-11-15)
+
+The pinned `openapi/openapi.yaml` (Tastile OpenAPI 1.0.1) turned out to
+disagree with the CLI in five places. Each one is fixed in this branch,
+and each fix follows the pinned contract rather than a local guess:
+
+| Finding | Contract | CLI before | Now |
+| --- | --- | --- | --- |
+| Cancel reason type | `CancelSourceTilePayloadSchema.reason` is `integer` (the server's `domain::source_tile::state::cancel_reason` registry) | free-text string, rejected by the server | `--reason-code` (0 = user-requested) |
+| Placement window | `SourceWindowSchema` requires `start_offset_ms` / `end_offset_ms` with `start < end` | `{"window": "anytime"}` | `{"start_offset_ms": 0, "end_offset_ms": 14400000}` |
+| One-time generation | `SourceGenerationSchema.kind = 0` requires the `at` instant | `{"kind": 0}` | `{"kind": 0, "at": "<horizon start>"}` |
+| Tile list parameters | `GET /v1/tiles` documents `owner_ids`, `limit`, `view_mode`, `lifecycle`, `range`, `granularity`, `search`, `exclude_future` | `window_start`, `window_end`, `plan_id`, `include_closed` (all ignored by the server) | only the documented parameters |
+| Listing page size | `limit` (1..500) and `offset` exist; the server defaults to 100 rows | one request, no pagination | `limit`/`offset` walked until a short page |
+
+Gaps that the pinned contract does **not** cover, and that the CLI
+therefore refuses or works around instead of inventing wire fields:
+
+- **No health / version handshake.** The pinned spec has no `/v1/health`
+  path, so the CLI cannot verify the target's binary version through the
+  pinned contract. Every authenticated request checks the stored token's
+  API-base binding and expiry. Every API mutation, including the server-side
+  revoke attempted by `auth logout`, also probes documented
+  `GET /v1/source-tiles`; this proves the
+  target accepts the credential but cannot independently verify the token
+  subject against a Core owner id or prove stack isolation. The contract has
+  no `whoami` operation, so that identity check remains a gap.
+- **Some list projections cannot be paged.** `GET /v1/tiles` and the pending
+  prompt list define no offset or cursor in the pinned spec. Those commands
+  make one request and cannot promise complete results if Core caps them.
+  Source-tile list/detail/placements do support documented `limit` / `offset`
+  and are paged through.
+- **No diff or patch endpoint.** `PUT /v1/source-tiles/{id}` is a full
+  replacement. The CLI's `--dry-run` compares fields exposed by the read
+  model and explicitly warns that the model omits plan details, flows,
+  horizon, request-shaped relations and `source_client_local_id`. Update
+  refuses drafts that omit those replacement fields; callers must provide
+  the full values. The
+  server has no non-destructive patch or preview operation, so dry-run
+  cannot compare hidden fields.
+- **No monthly recurrence.** `SourceGenerationSchema.kind` documents
+  `0 = one-time` and `1 = recurring` only. `source-tiles create --monthly`
+  fails with an explicit error; the CLI never approximates a monthly rule
+  as a daily one. Daily and weekly wall times use fixed UTC offsets; the
+  CLI does not apply daylight-saving transitions or named-zone holiday
+  calendars. Core's worker materializes placements, so create acceptance
+  does not prove a placement exists until it is read back.
+- **Cancel reason registry values are not in the spec.** The schema points
+  at the server-side registry; the CLI sends the numeric code the operator
+  passes (`--reason-code`) and documents `0 = user-requested`.
+- **Schedule-publish linkage is stricter in Core than the schema.** The
+  OpenAPI marks `source_client_local_id`, `source_schedule`, and
+  `source_horizon` individually optional/nullable. The isolated Core
+  returned `422` when only the latter two were supplied. The CLI now
+  validates that these three existing fields are either all absent/null
+  or all supplied; it does not add wire fields.
+- **Core validates completion conditions beyond the schema.** An empty
+  `All` condition is structurally representable in OpenAPI but Core refuses
+  it as empty/invalid. The successful publish E2E used a non-empty Fact term;
+  offline preview does not attempt to prove all Core scheduling semantics.
+
+## CLI end-to-end evidence against an isolated Core (2026-11-15)
+
+### Stack identity
+
+| Item | Value |
+| --- | --- |
+| Core image | `tastile-core-verify:rel110-d0c2ce0` (`sha256:15929d970bd2777eba203a1af4e8cb494878dca94c8b042cef657c31caaca334`, built 2026-11-14) |
+| API | `127.0.0.1:31500` (`TASTILE_API_PORT=31500`, `TASTILE_ENV=development`) |
+| Database | own container `tcli-e2e-db` (`127.0.0.1:55441`), own database `tastile_cli_e2e`, own user and password |
+| Worker | own container `tcli-e2e-worker` |
+| Delivery | `TASTILE_DELIVERY_PROVIDER=fake` — no real notification sink |
+| Owner / credential | dedicated owner row and a dedicated API token in the isolated database |
+| Shared verify stack | **not accessed by the E2E harness**; its API is never called and its database is never queried |
+
+The stack is created by `scripts/e2e-local-stack.sh`; the CLI run is
+`scripts/e2e-cli-smoke.sh`.
+
+### Results
+
+| Check | Result |
+| --- | --- |
+| Write to the operational port 31400 | refused locally, before any request |
+| Loopback write without `TASTILE_ISOLATED_TEST_STACK=confirmed` | refused locally, before any request |
+| `--monthly` | refused explicitly, not approximated as daily |
+| `source-tiles list` | reads every row (paginated); the mock integration test crosses the 500-row page boundary with 503 rows |
+| `source-tiles create --daily 09:00 --utc-offset 540` | accepted; readback preserves `kind=1`, `interval_ms=86400000`, `offset_min=540` |
+| `source-tiles create --daily 10:00` | stores explicit `offset_min=0` (UTC), so Core cannot substitute the owner-profile timezone |
+| `source-tiles get` / `placements` | decoded against the real API; detail and placement pagination tests walk multiple pages |
+| `source-tiles create --once <future instant>` | the dedicated worker materialized an open placement, which the CLI then started as an execution |
+| `source-tiles update --dry-run` | printed the field diff and left the stored title unchanged |
+| `source-tiles update --expect-revision <stale>` | rejected by the server with `409 stale revision` |
+| `source-tiles update --expect-revision <current>` | applied a complete replacement and read the updated title/revision back |
+| `source-tiles cancel --dry-run` | printed the placement scope, wrote nothing |
+| `source-tiles cancel` | cancelled; the readback shows `source_state = 3` |
+| `source-tiles reflow --dry-run` / apply | previewed its scope, applied with `--expect-revision`, and read the source state and placements back |
+| `executions start / pause / resume / finish` | all succeeded; the start response carries the execution id |
+| `prompts request / list / resolve` | all succeeded |
+| `schedule publish --apply` | required an explicit idempotency key, applied to the isolated loopback Core, and was read back through the source-tile API |
+| `auth logout` | server-side revocation passed the write gate and the file-backed local credential was removed |
+
+### Authentication mismatch (test systems only)
+
+The production CLI obtains its bearer token through the browser-mediated
+PKCE flow (`{web_url}/cli/authorize` + `{web_url}/api/cli/token`). An
+isolated Core stack runs neither the web origin nor a PKCE issuer, so no
+token can be minted through that flow. On **test systems** the token is
+therefore minted directly in the isolated database and handed to the CLI
+  through `TASTILE_CREDENTIAL_FILE`, a file-backed credential store that is
+  honoured **only** for a loopback API base and refuses a file readable by
+  other users. The test harness keeps the bearer in a mode-0600 temporary
+  file and does not print it. The OS credential store remains the production
+  path; nothing in this branch weakens the production authentication model.
+
 ## Safety boundary
 
 The Muse VM's operational Tastile v1 API is bound to **127.0.0.1:31400**.
@@ -13,11 +126,15 @@ Do not use this port for test API, migration, restart, CLI mutation, or
 comparison. Localhost is **not synonymous with test**. The operational
 PostgreSQL and background hooks remain the only production source of truth.
 
-The `tastile schedule publish --apply` command has two deliberately narrow
-guardrails: (a) reject non-loopback targets and operational port 31400;
-(b) require `TASTILE_ISOLATED_TEST_STACK=confirmed`. These are safeguards
-against accidental writes, not proof of isolation. An operator must independently
-verify the actual DB target, test account, worker, secrets and notification sink.
+Every write path passes the shared gate: loopback needs
+`TASTILE_ISOLATED_TEST_STACK=confirmed`, port 31400 is always refused, remote
+plaintext is refused, credentials must match the configured API base and be
+unexpired, and the target must accept a documented read probe. Ordinary
+mutations may use an explicitly configured HTTPS API; `schedule publish
+--apply` is additionally loopback-only and requires a stable idempotency key.
+These are safeguards against accidental writes, not proof of isolation. An
+operator must independently verify the actual DB target, test account, worker,
+secrets and notification sink.
 Never run a test command using the operational test account or its credentials.
 
 A dry-run preview checks only the documented minimal OpenAPI shape. A successful

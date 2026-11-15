@@ -59,7 +59,9 @@ pub struct RequestPromptRequest {
 /// Spec: `components.schemas.RequestPromptPayloadSchema`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RequestPromptPayload {
-    pub prompt_kind: i32,
+    /// Numeric `PromptKind` — 0 STARTUP_RECOVERY / 1 MISSED_START /
+    /// 2 DECISION_REQUIRED / 3 STALE_ACTIVE_EXECUTION.
+    pub kind: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
@@ -69,7 +71,7 @@ impl RequestPromptRequest {
         Self {
             idempotency_key: Uuid::new_v4(),
             payload: RequestPromptPayload {
-                prompt_kind,
+                kind: prompt_kind,
                 note: None,
             },
             occurred_at: None,

@@ -4,6 +4,100 @@ All notable changes to `tastile-cli` are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Local-first hardening for issue
+[tastile/tastile-cli#6](https://github.com/tastile/tastile-cli/issues/6).
+
+### Added
+
+- **Write-target gate for every mutating command** (`source-tiles`
+  create/update/cancel/reflow, `executions`, `prompts`,
+  `schedule publish --apply`, server-side revocation in `auth logout`, and
+  the matching TUI actions). A loopback
+  target requires `TASTILE_ISOLATED_TEST_STACK=confirmed` and must not
+  use the reserved operational port 31400; remote API bases require HTTPS.
+  Before the request leaves the process the CLI probes the target with a
+  documented read endpoint and requires the stored credential to be
+  accepted. Credentials are API-base-bound and checked for expiry before
+  every authenticated API request.
+- **Short recurrence input** for `source-tiles create`: `--once`,
+  `--daily`, `--weekly --days`, `--exclude`, `--duration`,
+  `--horizon-days`, `--priority`, `--utc-offset`. Monthly is refused with
+  an explicit error instead of being approximated as daily.
+- **Non-destructive diff** (`source-tiles update --dry-run`), **impact
+  preview** (`cancel` / `reflow --dry-run`) and **post-write readback**
+  of the resulting source-tile state.
+- **Revision conflict detection** via `--expect-revision`, mapped to the
+  contract's `expected_revision` envelope field.
+- **Reusable schedule-publish retries** — `schedule publish --apply` now
+  requires an explicit `--idempotency-key`.
+- `docs/cli-operations.md` — operation guide, expected error messages and
+  a safe stop/resume procedure.
+- `scripts/e2e-local-stack.sh` — spins up a dedicated isolated Core stack
+  (own PostgreSQL container, database, owner, API and worker on a port
+  other than 31400) for CLI end-to-end tests.
+- `scripts/e2e-cli-smoke.sh` — drives the CLI against that stack and
+  asserts the guards, the CRUD path, the diff, the revision conflict, the
+  impact preview, the readback and the execution lifecycle.
+- `TASTILE_CREDENTIAL_FILE` — a **test-only** file-backed credential
+  store, honoured only for a loopback API base (the OS credential store
+  stays the production path). It exists because an isolated Core stack has
+  no web origin to mint a PKCE token and a headless runner has no
+  reachable keychain. The file must not be readable by other users.
+
+### Fixed
+
+- `source-tiles cancel` sent a free-text reason; the contract defines
+  `CancelSourceTilePayloadSchema.reason` as a numeric registry code, so
+  the server rejected it. The CLI now sends `--reason-code` (0 =
+  user-requested).
+- The source-tile **read model** did not match the contract:
+  `SourceTileRead.schedule` is `SourceScheduleDefinitionSchema`
+  (duration, generation, window, split policy, priority), but the CLI
+  modelled a different projection, so `source-tiles list` / `get` failed
+  to decode against a real Core. The model now follows the contract, and
+  the update diff compares the schedule fields exposed by the read model.
+- `executions pause` / `resume` omitted the envelope's `payload` member,
+  which the server requires (`422`). The CLI now sends `payload: null`
+  as the contract describes.
+- `prompts request` sent `payload.prompt_kind`; the contract names the
+  field `kind`, so the request was rejected with `422`.
+- `source-tiles list` and `source-tiles placements` silently stopped at
+  the server's default page size. Source-tile list, detail, and placements
+  now walk the documented `limit` / `offset` pages until the end of the
+  result set. `GET /v1/tiles` and pending-prompt list have no cursor or
+  offset in the pinned contract, so those views remain single-request.
+- `source-tiles create` sent a window object the contract does not
+  define and a one-time generation without its instant, so the server
+  rejected the payload. The defaults now match
+  `SourceWindowSchema` / `SourceGenerationSchema`.
+- `tiles` sent query parameters that the pinned contract does not define
+  (`window_start`, `window_end`, `plan_id`, `include_closed`); the CLI
+  now only sends the documented ones (`lifecycle`, `search`, `view_mode`,
+  `limit`, `exclude_future`).
+- `executions start` did not print the id of the execution it created;
+  the aggregate id is now shown, so the execution can be paused, resumed
+  or finished.
+- Errors printed only the outer context; the CLI now prints the whole
+  error chain, so the root cause (for example a credential-store backend
+  error) is visible.
+- `cargo fmt --all -- --check` failed on the branch (the schedule publish
+  code was not formatted).
+- Stored credentials are now bound to their API base and expiry before
+  writes; bearer values are redacted from `Debug` output. `auth logout`
+  passes server-side revocation through the same gate and always removes
+  the local credential.
+- Source-tile update now rejects partial JSON drafts because the pinned
+  `PUT` contract is a full replacement and the read model omits plan
+  details, flows, horizon, request-shaped relations and
+  `source_client_local_id`.
+- Isolated Core E2E showed that schedule publication requires
+  `source_client_local_id`, `source_schedule`, and `source_horizon` together
+  when any is supplied; the CLI now refuses partial linkage offline. Core
+  also rejects empty completion condition trees, which remains a
+  server-owned semantic check beyond the pinned schema shape.
+
 ## [1.0.0] — 2026-09-27
 
 First production release of `tastile-cli`. The binary speaks directly to

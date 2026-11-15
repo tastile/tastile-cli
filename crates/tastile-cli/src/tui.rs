@@ -237,7 +237,8 @@ async fn cancel_focused(app: &mut App) {
         app.status = "no source tile selected".into();
         return;
     };
-    match app::cancel_source_tile(&app.ctx, row.id, "user-requested").await {
+    // Numeric cancel-reason registry code (0 = user-requested).
+    match app::cancel_source_tile(&app.ctx, row.id, 0, None).await {
         Ok(_) => {
             app.status = format!("✓ Cancelled source tile {}", row.title);
             refresh(app).await;
