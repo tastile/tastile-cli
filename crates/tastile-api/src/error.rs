@@ -19,8 +19,8 @@ pub enum ApiError {
     #[error("transport: {0}")]
     Transport(#[from] reqwest::Error),
 
-    /// Server returned non-2xx. The body is included for `tracing` but never
-    /// printed to the user (credentials may be present in some responses).
+    /// Server returned non-2xx. The response body is included in the error
+    /// message and may be shown to the user; servers must not echo credentials.
     #[error("http {status}: {message}")]
     Http { status: u16, message: String },
 
@@ -33,6 +33,10 @@ pub enum ApiError {
     /// The provided base URL is malformed.
     #[error("invalid base url: {0}")]
     InvalidBaseUrl(String),
+
+    /// The documented API pagination could not advance any further.
+    #[error("pagination: {0}")]
+    Pagination(String),
 
     /// Operation requested after the configured timeout elapsed.
     #[error("timeout after {0:?}")]

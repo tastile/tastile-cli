@@ -154,6 +154,36 @@ pub fn print_source_tile_detail(detail: &tastile_api::SourceTileDetailRead) {
     println!("  relations:  {} entries", detail.relations.len());
     println!("  occurrences: {} entries", detail.occurrences.len());
     println!("  placements:  {} entries", detail.placements.len());
+    let schedule = &s.schedule;
+    println!(
+        "  schedule:    kind={} duration={}ms priority={}",
+        schedule.generation.kind, schedule.required_duration_ms, schedule.priority
+    );
+    if let Some(at) = schedule.generation.at {
+        println!("  at:          {}", at);
+    }
+    if let Some(starts_at) = schedule.generation.starts_at {
+        println!("  starts_at:   {}", starts_at);
+    }
+    if let Some(interval_ms) = schedule.generation.interval_ms {
+        println!("  interval_ms: {}", interval_ms);
+    }
+    if let Some(mask) = schedule.generation.weekday_mask {
+        println!("  weekday_mask: {mask}");
+    }
+    if let Some(offset) = schedule.generation.offset_min {
+        println!("  offset_min:  {offset}");
+    }
+    if !schedule.generation.excluded_dates.is_empty() {
+        println!(
+            "  excluded:    {}",
+            schedule.generation.excluded_dates.join(", ")
+        );
+    }
+    println!(
+        "  window:      {}..{} ms after the nominal time",
+        schedule.window.start_offset_ms, schedule.window.end_offset_ms
+    );
     print_placements_table(&detail.placements);
 }
 
@@ -205,7 +235,49 @@ pub fn print_command_response(r: &tastile_api::CommandResponse) {
         println!("  revision:    {rev}");
     }
     println!("  result:      {}", r.result);
+    if let Some(aggregate) = &r.aggregate {
+        if let Some(id) = aggregate.get("id").and_then(|value| value.as_str()) {
+            println!("  aggregate:   {id}");
+        }
+    }
     if !r.pending.is_empty() {
         println!("  pending:     {} items", r.pending.len());
     }
+}
+
+/// Print the field-level diff between the stored source tile and a
+/// proposed draft.
+pub fn print_diff(diffs: &[crate::app::FieldDiff]) {
+    if diffs.is_empty() {
+        println!("No field changes detected by the read model.");
+        return;
+    }
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(diffs.len());
+    for d in diffs {
+        rows.push(vec![
+            d.field.clone(),
+            short(&d.current, 40),
+            short(&d.proposed, 40),
+        ]);
+    }
+    print_table(&["field", "current", "proposed"], rows);
+}
+
+/// Print the placement scope a cancel / reflow would touch.
+pub fn print_impact(operation: &str, impact: &crate::app::PlacementImpact) {
+    println!(
+        "{operation} impact: {} placement(s) owned, {} still open, {} in scope",
+        impact.total, impact.open, impact.in_range
+    );
+    if !impact.rows.is_empty() {
+        print_placements_table(&impact.rows);
+    }
+}
+
+/// Print the state read back from the server after a write.
+pub fn print_readback(state: &crate::app::SourceTileState) {
+    println!(
+        "  readback:    state={} revision={} placements={} (open {})",
+        state.source_state, state.revision, state.placements_total, state.placements_open
+    );
 }

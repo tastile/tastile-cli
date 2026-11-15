@@ -38,10 +38,13 @@
 
 pub mod auth;
 pub mod client;
+#[cfg(test)]
+mod drift;
 pub mod error;
 pub mod executions;
 pub mod model;
 pub mod prompts;
+pub mod schedule;
 pub mod source_tiles;
 pub mod tiles;
 
@@ -58,15 +61,20 @@ pub use prompts::{
     StartupRecoveryRequest, list_pending_prompts, request_prompt, resolve_prompt,
     respond_startup_recovery,
 };
+pub use schedule::{
+    PublishScheduleDefinitionRequest, publish_schedule_definition, validate_publish_payload,
+};
 pub use source_tiles::{
     CancelSourceTilePayload, CancelSourceTileRequest, CreateSourceScheduleDefinition,
-    CreateSourceTilePayload, CreateSourceTileRequest, PlacementTileRead, RecurrenceView,
-    ReflowSourceTilePayload, ReflowSourceTileRequest, RelationDefinitionRead,
-    SchedulePlanDefinition, ScheduleTileDefinition, SourceOccurrenceRead, SourceScheduleDefinition,
-    SourceTileCompletion, SourceTileDetailRead, SourceTileRead, SourceTileSummary, Span,
-    TemporalView, UpdateSourceTilePayload, UpdateSourceTileRequest, cancel_source_tile,
-    create_source_tile, get_source_tile, get_source_tile_completion, list_source_tile_placements,
-    list_source_tiles, reflow_source_tile, update_source_tile,
+    CreateSourceTilePayload, CreateSourceTileRequest, ListResponse, PlacementTileRead,
+    RecurrenceView, ReflowSourceTilePayload, ReflowSourceTileRequest, RelationDefinitionRead,
+    SOURCE_TILE_PAGE_SIZE, SchedulePlanDefinition, ScheduleTileDefinition, SourceGeneration,
+    SourceOccurrenceRead, SourceScheduleDefinition, SourceSplitPolicy, SourceTileCompletion,
+    SourceTileDetailRead, SourceTileRead, SourceTileSummary, SourceWindow, Span, TemporalView,
+    UpdateSourceTilePayload, UpdateSourceTileRequest, cancel_source_tile, create_source_tile,
+    get_source_tile, get_source_tile_completion, list_all_source_tile_placements,
+    list_all_source_tiles, list_source_tile_placements, list_source_tiles, reflow_source_tile,
+    update_source_tile,
 };
 pub use tiles::list_tiles;
 

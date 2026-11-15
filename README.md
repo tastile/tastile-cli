@@ -52,18 +52,18 @@ cargo build --release
 | `tastile` (no args) | Launch the TUI. |
 | `tastile auth login` | Browser-based PKCE authorization (loopback callback). |
 | `tastile auth status` | Show whether a bearer token is stored. |
-| `tastile auth logout` | Drop the local token and revoke server-side. |
+| `tastile auth logout` | Remove the local token; attempt guarded server-side revocation. |
 | `tastile doctor` | Diagnostics: toolchain, credential store, API reachability. |
 | `tastile today` | Show the next actionable tile for today. |
 | `tastile tiles` | List tiles in the current day window. |
-| `tastile source-tiles list` | List source tiles. |
-| `tastile source-tiles get <id>` | Show one source tile + its placements. |
-| `tastile source-tiles create --title …` | Create a source tile from a draft (or `--from-json`). |
-| `tastile source-tiles update <id> --from-json` | Update a source tile. |
-| `tastile source-tiles cancel <id>` | Cancel a source tile. |
+| `tastile source-tiles list` | List every source tile (paginated; no silent 100-row cap). |
+| `tastile source-tiles get <id>` | Show one source tile + every occurrence and placement (paginated). |
+| `tastile source-tiles create --title … --once/--daily/--weekly` | Create a source tile from a short recurrence description (or `--from-json`). |
+| `tastile source-tiles update <id> --from-json` | Full replacement update; requires the complete payload (`--dry-run` compares visible fields, `--expect-revision` detects conflicts). |
+| `tastile source-tiles cancel <id>` | Cancel a source tile (`--dry-run` shows the affected placements). |
 | `tastile source-tiles completion <id>` | Show the completion plan tree. |
-| `tastile source-tiles placements <id>` | List placements of a source tile. |
-| `tastile source-tiles reflow <id> --from … --to …` | Re-flow placements within a window. |
+| `tastile source-tiles placements <id>` | List every placement of a source tile (paginated). |
+| `tastile source-tiles reflow <id> --from … --to …` | Re-flow placements within a window (`--dry-run` shows the scope). |
 | `tastile executions start <placement-id>` | Start an execution. |
 | `tastile executions pause <execution-id>` | Pause an execution. |
 | `tastile executions resume <execution-id>` | Resume an execution. |
@@ -72,9 +72,84 @@ cargo build --release
 | `tastile prompts request <kind> …` | Request a new prompt (server-driven). |
 | `tastile prompts startup-recovery …` | Trigger a startup-recovery prompt. |
 | `tastile prompts resolve <id> --resolution ack|dismiss|act` | Resolve a prompt. |
-| `tastile schedule regenerate` | Re-publish the schedule definition. |
+| `tastile schedule publish --from-json PATH` | Validate and preview the canonical schedule payload locally (no API call). |
+| `tastile schedule publish --from-json PATH --apply` | Publish only to an explicitly confirmed **isolated** loopback Core, never the Muse operational port 31400. |
+| `tastile schedule regenerate` | Deprecated placeholder: exits with an error instead of falsely reporting success. |
 | `tastile completions <shell>` | Generate a shell completion script. |
 | `tastile version` | Print version + pinned OpenAPI metadata. |
+
+## Local-first schedule publication (experimental)
+
+The schedule command is **not** proof of Muse replacement. It validates the
+required OpenAPI payload envelope and supports an offline preview; the Core
+server determines the actual recurrence, placement and feasibility. Use a
+**dedicated isolated Core database**: never point this flow at the current
+operational Muse/Tastile schedule or reuse its notification queue.
+
+Prepare a JSON payload containing `tile` (with a nonempty `title`),
+`plan`, `reference_targets`, `windows`, and `flows`. Additional fields
+such as `source_schedule`, `source_horizon` and `recurrence` must follow
+the pinned OpenAPI and Core version. A CLI preview does not mean the payload
+is schedulable; check Core read-back and materialized placements before
+considering any success.
+For source-backed publishes, Core requires `source_client_local_id`,
+`source_schedule` and `source_horizon` together, and rejects empty or
+invalid completion conditions. Offline preview does not prove these
+server-side semantics.
+
+```sh
+# Validate the required payload envelope completely offline.
+tastile schedule publish --from-json ./local-schedule.json
+
+# Configure an isolated test API + separate database, token and notification sink.
+# Port 31400 is reserved by the operational Muse stack and cannot be used.
+TASTILE_API_URL=http://127.0.0.1:31402 \
+  TASTILE_ISOLATED_TEST_STACK=confirmed \
+  tastile schedule publish --from-json ./local-schedule.json --apply \
+  --idempotency-key <stable-uuid>
+```
+
+The `--idempotency-key` is required for `--apply` and **must be reused**
+for an uncertain retry. An omitted `--apply` never opens the credential store
+or network. Non-loopback `--apply`, operational port 31400, and missing isolated-stack
+confirmation all fail closed. The confirmation flag is an operator safeguard,
+not a substitute for verifying the actual database, owner and notification
+configuration. An invalid payload fails instead of silently becoming daily. The old `regenerate`
+subcommand now returns an error rather than claiming to have regenerated.
+
+See [CLI acceptance and Muse shadow matrix](./docs/local-first-acceptance.md)
+for the outstanding integration checks.
+
+## Write-target safety (all mutating commands)
+
+The same gate protects **every** write, not only `schedule publish`:
+
+`ApiConfig` refuses API base port 31400 for **all** requests, including
+read-only commands, before opening a connection.
+
+| Target | Decision |
+| --- | --- |
+| Any other loopback target | Allowed only with `TASTILE_ISOLATED_TEST_STACK=confirmed`. |
+| Remote `http://` | Refused — remote API bases must use HTTPS for reads and writes. |
+| Remote `https://` | Allowed for ordinary API writes when explicitly configured; `schedule publish --apply` remains loopback-only. |
+
+Before a write leaves the process, the CLI also probes the target with a
+documented read endpoint (`GET /v1/source-tiles`) and requires the stored
+credential to be accepted. Every authenticated request checks that the
+stored credential was issued for the configured API base and is not expired.
+The pinned contract has
+no `whoami` or version operation, so the probe cannot independently identify
+the owner or prove the stack is isolated; only the operator can attest isolation.
+
+See [docs/cli-operations.md](./docs/cli-operations.md) for the full
+operation guide, expected error messages and a safe stop/resume procedure.
+The pinned `GET /v1/tiles` and pending-prompt list endpoints have no offset
+or cursor, so those views make one request and cannot guarantee completeness
+if Core applies a result cap. The CLI warns when `/v1/tiles` reaches its
+current 500-row cap. Source-tile list, detail and placements use the cursor
+contract from Core PRs #302/#305 ahead of the OpenAPI pin; the pin is pending
+Core merge and publication. Legacy array responses still decode, but a full
+500-row legacy page fails explicitly because it cannot prove completeness.
 
 ## Architecture
 
@@ -111,10 +186,11 @@ HTTP shape. The drift gate in `crates/tastile-api/build.rs` enforces:
    the right method, path parameters, request body schema, required
    payload fields, and 200 response shape.
 
-The CLI surface covers **18 of the 21** operations in the pinned spec.
-The 3 admin operations (`delete_owner`, `export_owner`,
-`publish_schedule_definition`) are intentionally out of scope for the
-initial CLI and are not in the drift-gate contract table.
+The CLI surface covers **19 of the 21** operations in the pinned spec.
+The remaining 2 administrative operations (`delete_owner`, `export_owner`)
+are intentionally out of scope and not in the drift-gate contract table.
+The newly covered `publish_schedule_definition` operation requires a full
+OpenAPI payload and is only writable to a loopback Core in this local-first phase.
 
 The deeper `scripts/check-openapi-drift.sh` is the same check, run as a
 shell script so it can also run in CI on every PR and on a weekly cron.

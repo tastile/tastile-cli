@@ -12,7 +12,7 @@
 //! to bind to anything else. The port is allocated by the OS so we never
 //! collide with another running `tastile auth login`.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -48,13 +48,13 @@ pub enum CallbackError {
 /// Loopback callback listener. Construct via [`CallbackListener::bind`].
 #[derive(Debug)]
 pub struct CallbackListener {
+    listener: TcpListener,
     addr: SocketAddr,
     timeout: Duration,
 }
 
 impl CallbackListener {
-    /// Bind to a random loopback port. The choice between IPv4 and IPv6
-    /// is OS-dependent; both are loopback.
+    /// Bind to a random IPv4 loopback port.
     pub async fn bind() -> Result<Self, CallbackError> {
         let v4 = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
             .await
@@ -62,10 +62,8 @@ impl CallbackListener {
         let addr = v4
             .local_addr()
             .map_err(|e| CallbackError::Bind(format!("local_addr: {e}")))?;
-        // Drop the listener; we will rebind on `serve` so we can hand the
-        // port out to the caller before serving.
-        drop(v4);
         Ok(Self {
+            listener: v4,
             addr,
             timeout: Duration::from_secs(120),
         })
@@ -85,13 +83,14 @@ impl CallbackListener {
 
     /// Serve one HTTP request and return the parsed outcome.
     pub async fn serve(self) -> Result<CallbackOutcome, CallbackError> {
-        let listener = TcpListener::bind(self.addr)
-            .await
-            .map_err(|e| CallbackError::Bind(format!("{}: {e}", self.addr)))?;
+        // Keep the socket bound from `bind()` through `serve()` so no other
+        // process can claim the callback port during the authorization flow.
+        let Self {
+            listener, timeout, ..
+        } = self;
 
         let (tx, rx) = oneshot::channel::<CallbackOutcome>();
         let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
-        let timeout = self.timeout;
 
         let serve = tokio::spawn(async move {
             if let Err(e) = run_server(listener, tx).await {
@@ -219,11 +218,6 @@ async fn parse_first_request(mut stream: tokio::net::TcpStream) -> Result<Callba
         CallbackParams { .. } => Err("missing `code` or `state` in callback".into()),
     }
 }
-
-// Silence the dead-code warning on the unused Ipv6Addr import — keep it for
-// future IPv6-only loopback support.
-#[allow(dead_code)]
-const _IPV6_LOOPBACK: Ipv6Addr = Ipv6Addr::LOCALHOST;
 
 #[cfg(test)]
 mod tests {

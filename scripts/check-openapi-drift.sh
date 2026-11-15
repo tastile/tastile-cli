@@ -7,7 +7,7 @@
 # 1. The submodule pointer is present and points to a concrete SHA.
 # 2. Every operationId the Rust client surface claims to use still exists
 #    in the pinned `openapi/openapi.yaml`.
-# 3. The 18 surface operations are exercised by the right Rust modules.
+# 3. The 19 surface operations are exercised by the right Rust modules.
 # 4. The pinned spec is OpenAPI 3.1.x with the expected `info.title` and
 #    `info.version` we pin in `crates/tastile-api/build.rs`.
 # 5. Every /v1 path in the pinned spec exists (no missing wire entries).
@@ -75,7 +75,7 @@ if [[ ! -f "$OPENAPI_YAML" ]]; then
   exit 1
 fi
 
-# All 18 operations the typed client claims to use. The drift gate in
+# All 19 operations the typed client claims to use. The drift gate in
 # `crates/tastile-api/build.rs` enforces each row with full structural
 # checks; this list is the human-readable summary.
 declare -a REQUIRED_OPS=(
@@ -84,6 +84,7 @@ declare -a REQUIRED_OPS=(
   request_prompt
   resolve_prompt
   respond_startup_recovery
+  publish_schedule_definition
   list_source_tiles
   get_source_tile
   create_source_tile
@@ -150,6 +151,7 @@ declare -a SURFACE_HINTS=(
   "request_prompt|crates/tastile-api/src/prompts.rs"
   "resolve_prompt|crates/tastile-api/src/prompts.rs"
   "respond_startup_recovery|crates/tastile-api/src/prompts.rs"
+  "publish_schedule_definition|crates/tastile-api/src/schedule.rs"
   "list_source_tiles|crates/tastile-api/src/source_tiles.rs"
   "get_source_tile|crates/tastile-api/src/source_tiles.rs"
   "create_source_tile|crates/tastile-api/src/source_tiles.rs"
@@ -182,7 +184,7 @@ if [[ "$DRIFT" -eq 0 ]]; then
   echo
   echo "ok: openapi drift check passed"
   echo "  ${#REQUIRED_OPS[@]} operations verified"
-  echo "  surface coverage: 18/18"
+  echo "  surface coverage: 19/19"
 else
   echo
   echo "fail: openapi drift detected"

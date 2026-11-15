@@ -9,6 +9,9 @@
 //!
 //! The trait exists so tests can substitute a deterministic in-memory store.
 
+use std::fmt;
+use std::io::Write;
+
 use thiserror::Error;
 
 /// Errors from the credential store. Most map directly to `keyring::Error`,
@@ -27,12 +30,23 @@ pub enum CredentialError {
 
 /// Subset of the stored token. The struct intentionally does not `derive
 /// Display` so it cannot be printed accidentally.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StoredToken {
     pub api_base_url: String,
     pub bearer: String,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub subject: Option<String>,
+}
+
+impl fmt::Debug for StoredToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoredToken")
+            .field("api_base_url", &self.api_base_url)
+            .field("bearer", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .field("subject", &self.subject)
+            .finish()
+    }
 }
 
 impl StoredToken {
@@ -78,6 +92,126 @@ pub const DEFAULT_SERVICE: &str = "tastile-cli";
 /// Standard user label. CLI supports only a single account at MVP, but the
 /// `(service, user)` shape keeps the door open for multi-account later.
 pub const DEFAULT_USER: &str = "default";
+
+/// File-backed credential store.
+///
+/// The OS credential store is the production path. This store exists for
+/// **test systems only**: a headless container or CI runner has no
+/// reachable keychain, and the isolated Core stack needs a bearer token
+/// that the operator minted out of band (the browser-mediated PKCE flow
+/// needs the web origin, which the isolated stack does not run).
+///
+/// The file holds the same JSON document as the OS store and must be
+/// readable by its owner only; a group- or world-readable file is
+/// refused instead of being used.
+pub struct FileCredentialStore {
+    path: std::path::PathBuf,
+}
+
+impl FileCredentialStore {
+    /// Create a store backed by the given file.
+    pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    /// The file this store reads and writes.
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// Refuse a credential file that other users can read.
+    fn ensure_private(&self) -> Result<(), CredentialError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = std::fs::metadata(&self.path).map_err(|e| {
+                CredentialError::Backend(format!("reading {}: {e}", self.path.display()))
+            })?;
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                return Err(CredentialError::Backend(format!(
+                    "credential file {} is readable by other users (mode {mode:04o}); \
+                     restrict it to the owner with `chmod 600`",
+                    self.path.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn open_private_file(path: &std::path::Path) -> Result<std::fs::File, CredentialError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(path)
+        .map_err(|e| CredentialError::Backend(format!("opening {}: {e}", path.display())))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| {
+                CredentialError::Backend(format!(
+                    "restricting permissions on {} before writing: {e}",
+                    path.display()
+                ))
+            })?;
+    }
+    Ok(file)
+}
+
+impl CredentialStore for FileCredentialStore {
+    fn load(&self, _service: &str, _user: &str) -> Result<Option<StoredToken>, CredentialError> {
+        if !self.path.exists() {
+            return Ok(None);
+        }
+        self.ensure_private()?;
+        let text = std::fs::read_to_string(&self.path).map_err(|e| {
+            CredentialError::Backend(format!("reading {}: {e}", self.path.display()))
+        })?;
+        let token: StoredToken =
+            serde_json::from_str(&text).map_err(|e| CredentialError::Malformed(e.to_string()))?;
+        Ok(Some(token))
+    }
+
+    fn save(
+        &self,
+        _service: &str,
+        _user: &str,
+        token: &StoredToken,
+    ) -> Result<(), CredentialError> {
+        if let Some(parent) = self.path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    CredentialError::Backend(format!("creating {}: {e}", parent.display()))
+                })?;
+            }
+        }
+        let serialized =
+            serde_json::to_string(token).map_err(|e| CredentialError::Malformed(e.to_string()))?;
+        let mut file = open_private_file(&self.path)?;
+        file.write_all(serialized.as_bytes()).map_err(|e| {
+            CredentialError::Backend(format!("writing {}: {e}", self.path.display()))
+        })?;
+        Ok(())
+    }
+
+    fn delete(&self, _service: &str, _user: &str) -> Result<(), CredentialError> {
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(CredentialError::Backend(format!(
+                "removing {}: {e}",
+                self.path.display()
+            ))),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Keyring-backed implementation.
@@ -178,5 +312,28 @@ mod tests {
         assert_eq!(loaded.api_base_url, "https://api.test");
         store.delete(DEFAULT_SERVICE, DEFAULT_USER).unwrap();
         assert!(store.load(DEFAULT_SERVICE, DEFAULT_USER).unwrap().is_none());
+    }
+
+    #[test]
+    fn stored_token_debug_redacts_the_bearer() {
+        let token = StoredToken::new("https://api.test", "do-not-print-this-token", None, None);
+        let debug = format!("{token:?}");
+        assert!(!debug.contains("do-not-print-this-token"));
+        assert!(debug.contains("[REDACTED]"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credential_file_is_private_at_open_before_token_bytes_are_written() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path =
+            std::env::temp_dir().join(format!("tastile-credential-{}", uuid::Uuid::new_v4()));
+        let file = open_private_file(&path).expect("open private credential file");
+        let mode = file.metadata().unwrap().permissions().mode() & 0o777;
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+
+        assert_eq!(mode, 0o600);
     }
 }
