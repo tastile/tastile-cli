@@ -80,6 +80,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             );
             println!("wire:");
             println!("  GET    /v1/tiles");
+            println!("  POST   /v1/schedule-definitions");
             println!("  GET    /v1/prompts/pending");
             println!("  POST   /v1/prompts");
             println!("  POST   /v1/prompts/{{id}}/resolve");
