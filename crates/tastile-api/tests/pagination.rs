@@ -199,6 +199,75 @@ async fn get_source_tile_walks_independent_occurrence_and_placement_cursors() {
 }
 
 #[tokio::test]
+async fn get_source_tile_omits_cursors_for_collections_that_are_done() {
+    let mut server = Server::new_async().await;
+    let first = server
+        .mock(
+            "GET",
+            "/v1/source-tiles/00000000-0000-0000-0000-000000000001",
+        )
+        .match_query(Matcher::Regex(
+            "occurrence_limit=500&placement_limit=500$".into(),
+        ))
+        .with_body(detail_page(
+            0,
+            1,
+            Some("occurrences-next"),
+            0,
+            1,
+            Some("placements-next"),
+        ))
+        .create_async()
+        .await;
+    let second = server
+        .mock(
+            "GET",
+            "/v1/source-tiles/00000000-0000-0000-0000-000000000001",
+        )
+        .match_query(Matcher::Regex(
+            "occurrence_limit=500&placement_limit=500&occurrence_cursor=occurrences-next&placement_cursor=placements-next".into(),
+        ))
+        .with_body(detail_page(1, 1, None, 1, 1, Some("placements-last")))
+        .create_async()
+        .await;
+    let third = server
+        .mock(
+            "GET",
+            "/v1/source-tiles/00000000-0000-0000-0000-000000000001",
+        )
+        .match_query(Matcher::Regex(
+            "occurrence_limit=500&placement_limit=500&placement_cursor=placements-last$".into(),
+        ))
+        .with_body(detail_page(2, 1, None, 2, 1, None))
+        .create_async()
+        .await;
+
+    let client = ApiClient::new(ApiConfig::new(&server.url()).expect("valid url")).expect("client");
+    let token = BearerToken::new("test-token");
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+
+    let detail = source_tiles::get_source_tile(&client, &token, id)
+        .await
+        .expect("gets remaining detail pages");
+
+    assert_eq!(detail.occurrences.len(), 2);
+    assert_eq!(detail.placements.len(), 3);
+    first.assert_async().await;
+    second.assert_async().await;
+    third.assert_async().await;
+}
+
+#[test]
+fn cursor_page_count_must_match_the_number_of_items() {
+    let error = serde_json::from_str::<source_tiles::ListResponse<i32>>(
+        r#"{"items":[1],"count":2,"next_cursor":null}"#,
+    )
+    .expect_err("inconsistent page count must be rejected");
+
+    assert!(error.to_string().contains("count"));
+}
+
+#[tokio::test]
 async fn get_source_tile_sends_occurrence_cursor_when_placements_are_done() {
     let mut server = Server::new_async().await;
     let first = server

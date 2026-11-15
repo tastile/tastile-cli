@@ -235,12 +235,20 @@ where
                 items,
                 count,
                 next_cursor,
-            } => Ok(Self {
-                items,
-                count,
-                next_cursor,
-                legacy_array: false,
-            }),
+            } => {
+                if count != items.len() {
+                    return Err(serde::de::Error::custom(format!(
+                        "cursor page count {count} does not match items length {}",
+                        items.len()
+                    )));
+                }
+                Ok(Self {
+                    items,
+                    count,
+                    next_cursor,
+                    legacy_array: false,
+                })
+            }
             Page::Legacy(items) => Ok(Self {
                 count: items.len(),
                 items,
@@ -389,7 +397,10 @@ pub async fn get_source_tile(
                         "source-tile detail returned a repeated occurrence cursor".into(),
                     ));
                 }
-                None => occurrence_done = true,
+                None => {
+                    occurrence_done = true;
+                    occurrence_cursor = None;
+                }
             }
         }
 
@@ -411,7 +422,10 @@ pub async fn get_source_tile(
                         "source-tile detail returned a repeated placement cursor".into(),
                     ));
                 }
-                None => placement_done = true,
+                None => {
+                    placement_done = true;
+                    placement_cursor = None;
+                }
             }
         }
 

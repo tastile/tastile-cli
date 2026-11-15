@@ -110,7 +110,7 @@ const CONTRACTS: &[OperationContract] = &[
         response_200: ResponseSpec::Ref("CommandResponse"),
         path_params: &[],
         required_envelope_fields: &["idempotency_key", "payload"],
-        payload_required_fields: &[],
+        payload_required_fields: &["kind"],
     },
     OperationContract {
         operation_id: "resolve_prompt",
@@ -193,7 +193,7 @@ const CONTRACTS: &[OperationContract] = &[
         response_200: ResponseSpec::Ref("CommandResponse"),
         path_params: &["id"],
         required_envelope_fields: &["idempotency_key", "payload"],
-        payload_required_fields: &[],
+        payload_required_fields: &["reason"],
     },
     OperationContract {
         operation_id: "get_source_tile_completion",
@@ -549,17 +549,23 @@ fn check_contract(
                 ));
                 return;
             }
-            if !contract.payload_required_fields.is_empty() {
-                let payload_required = payload_required_fields(expected, schemas);
-                for required in contract.payload_required_fields {
-                    if !payload_required.contains(*required) {
-                        emit_error(&format!(
-                            "tastile-api: contract drift: payload for `{} {}` is missing required field `{}`",
-                            contract.method, contract.path, required
-                        ));
-                        return;
-                    }
+            let payload_required = drift::payload_required_fields(expected, schemas);
+            for required in contract.payload_required_fields {
+                if !payload_required
+                    .as_ref()
+                    .is_some_and(|fields| fields.contains(*required))
+                {
+                    emit_error(&format!(
+                        "tastile-api: contract drift: payload for `{} {}` is missing required field `{}`",
+                        contract.method, contract.path, required
+                    ));
+                    return;
                 }
+            }
+            // Check every payload schema, including payloads whose current
+            // schema has no required fields and contract rows with an empty
+            // modelled-field list. This catches newly-required wire fields.
+            if let Some(payload_required) = payload_required {
                 let unmodelled = drift::unmodelled_required_fields(
                     &payload_required,
                     contract.payload_required_fields,
@@ -729,35 +735,19 @@ fn is_empty_schema(s: &serde_yaml::Value) -> bool {
 }
 
 fn schema_required_fields(name: &str, schemas: &serde_yaml::Mapping) -> BTreeSet<String> {
-    let Some(schema) = schemas.get(name).and_then(|s| s.as_mapping()) else {
+    let Some(schema) = schemas.get(name).and_then(|schema| schema.as_mapping()) else {
         return BTreeSet::new();
     };
     schema
         .get("required")
-        .and_then(|r| r.as_sequence())
-        .map(|seq| {
-            seq.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .and_then(|required| required.as_sequence())
+        .map(|required| {
+            required
+                .iter()
+                .filter_map(|field| field.as_str().map(str::to_owned))
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn payload_required_fields(envelope: &str, schemas: &serde_yaml::Mapping) -> BTreeSet<String> {
-    let Some(schema) = schemas.get(envelope).and_then(|s| s.as_mapping()) else {
-        return BTreeSet::new();
-    };
-    let Some(properties) = schema.get("properties").and_then(|p| p.as_mapping()) else {
-        return BTreeSet::new();
-    };
-    let Some(payload) = properties.get("payload").and_then(|p| p.as_mapping()) else {
-        return BTreeSet::new();
-    };
-    let Some(ref_str) = payload.get("$ref").and_then(|r| r.as_str()) else {
-        return BTreeSet::new();
-    };
-    let payload_schema = ref_str.rsplit('/').next().unwrap_or(ref_str);
-    schema_required_fields(payload_schema, schemas)
 }
 
 fn observe_spec(paths: &serde_yaml::Mapping) -> serde_json::Value {

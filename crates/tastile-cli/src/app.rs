@@ -560,10 +560,16 @@ pub(crate) async fn cancel_source_tile_with_permit(
     _permit: &WritePermit,
 ) -> Result<CommandResponse> {
     let token = ctx.require_token()?;
-    let current = api_source_tiles::get_source_tile(ctx, token, id)
-        .await
-        .context("fetching source tile revision before cancel failed")?;
-    let revision = effective_expected_revision(expected_revision, current.source.revision);
+    let revision = match expected_revision {
+        Some(revision) => revision,
+        None => {
+            api_source_tiles::get_source_tile(ctx, token, id)
+                .await
+                .context("fetching source tile revision before cancel failed")?
+                .source
+                .revision
+        }
+    };
     let req = CancelSourceTileRequest::new(reason_code).with_expected_revision(revision);
     api_source_tiles::cancel_source_tile(ctx, token, id, &req)
         .await
@@ -578,10 +584,16 @@ pub(crate) async fn reflow_source_tile_with_permit(
     _permit: &WritePermit,
 ) -> Result<CommandResponse> {
     let token = ctx.require_token()?;
-    let current = api_source_tiles::get_source_tile(ctx, token, id)
-        .await
-        .context("fetching source tile revision before reflow failed")?;
-    let revision = effective_expected_revision(expected_revision, current.source.revision);
+    let revision = match expected_revision {
+        Some(revision) => revision,
+        None => {
+            api_source_tiles::get_source_tile(ctx, token, id)
+                .await
+                .context("fetching source tile revision before reflow failed")?
+                .source
+                .revision
+        }
+    };
     let req = ReflowSourceTileRequest::new(range).with_expected_revision(revision);
     api_source_tiles::reflow_source_tile(ctx, token, id, &req)
         .await
@@ -901,10 +913,6 @@ pub async fn read_back(ctx: &AppContext, id: Uuid) -> Result<SourceTileState> {
     })
 }
 
-fn effective_expected_revision(override_revision: Option<i64>, current_revision: i64) -> i64 {
-    override_revision.unwrap_or(current_revision)
-}
-
 // ---------------------------------------------------------------------------
 // Executions.
 // ---------------------------------------------------------------------------
@@ -1060,6 +1068,78 @@ pub async fn respond_startup_recovery(
 mod tests {
     use super::*;
 
+    async fn context_capturing_first_request_line()
+    -> (AppContext, WritePermit, tokio::task::JoinHandle<String>) {
+        use tokio::io::AsyncBufReadExt;
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind request capture listener");
+        let address = listener.local_addr().expect("listener address");
+        let request_line = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept API request");
+            let mut reader = tokio::io::BufReader::new(stream);
+            let mut line = String::new();
+            reader
+                .read_line(&mut line)
+                .await
+                .expect("read request line");
+            line
+        });
+
+        let api_url = format!("http://{address}");
+        let api = ApiClient::new(ApiConfig::new(&api_url).expect("valid loopback URL"))
+            .expect("API client");
+        let mut config = Config::default();
+        config.api_url.clone_from(&api_url);
+        let ctx = AppContext {
+            api,
+            config,
+            token: Some(BearerToken::new("test-token")),
+            subject: None,
+            credential_api_base_url: Some(api_url),
+            credential_expires_at: None,
+        };
+        (ctx, WritePermit { _private: () }, request_line)
+    }
+
+    #[tokio::test]
+    async fn explicit_cancel_and_reflow_revisions_skip_detail_pre_reads() {
+        for operation in ["cancel", "reflow"] {
+            let (ctx, permit, request_line) = context_capturing_first_request_line().await;
+            let id = Uuid::new_v4();
+            let result = if operation == "cancel" {
+                cancel_source_tile_with_permit(&ctx, id, 0, Some(12), &permit).await
+            } else {
+                let now = Utc::now();
+                reflow_source_tile_with_permit(
+                    &ctx,
+                    id,
+                    Span {
+                        start: now,
+                        end: now + chrono::Duration::hours(1),
+                    },
+                    Some(12),
+                    &permit,
+                )
+                .await
+            };
+
+            assert!(result.is_err(), "capture server closes after request line");
+            let request_line = request_line.await.expect("captured request");
+            let expected_suffix = if operation == "cancel" {
+                "cancel"
+            } else {
+                "reflow"
+            };
+            assert_eq!(
+                request_line,
+                format!("POST /v1/source-tiles/{id}/{expected_suffix} HTTP/1.1\r\n"),
+                "an explicit revision should go straight to the mutation endpoint"
+            );
+        }
+    }
+
     #[test]
     fn prompt_resolution_parses_user_friendly_aliases() {
         assert_eq!(
@@ -1133,12 +1213,6 @@ mod tests {
 
         draft.plan_role = 1;
         assert!(validate_plan_role(&draft).is_ok());
-    }
-
-    #[test]
-    fn write_revision_uses_fresh_read_by_default_and_flag_as_override() {
-        assert_eq!(effective_expected_revision(None, 41), 41);
-        assert_eq!(effective_expected_revision(Some(7), 41), 7);
     }
 
     #[test]
