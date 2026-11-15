@@ -72,9 +72,46 @@ cargo build --release
 | `tastile prompts request <kind> …` | Request a new prompt (server-driven). |
 | `tastile prompts startup-recovery …` | Trigger a startup-recovery prompt. |
 | `tastile prompts resolve <id> --resolution ack|dismiss|act` | Resolve a prompt. |
-| `tastile schedule regenerate` | Re-publish the schedule definition. |
+| `tastile schedule publish --from-json PATH` | Validate and preview the canonical schedule payload locally (no API call). |
+| `tastile schedule publish --from-json PATH --apply` | Publish to an authenticated **loopback** Core API; rejects remote targets. |
+| `tastile schedule regenerate` | Deprecated placeholder: exits with an error instead of falsely reporting success. |
 | `tastile completions <shell>` | Generate a shell completion script. |
 | `tastile version` | Print version + pinned OpenAPI metadata. |
+
+## Local-first schedule publication (experimental)
+
+The schedule command is **not** proof of Muse replacement. It validates the
+required OpenAPI payload envelope and supports an offline preview; the Core
+server determines the actual recurrence, placement and feasibility. Use a
+**dedicated isolated Core database**: never point this flow at the current
+operational Muse/Tastile schedule or reuse its notification queue.
+
+Prepare a JSON payload containing `tile` (with a nonempty `title`),
+`plan`, `reference_targets`, `windows`, and `flows`. Additional fields
+such as `source_schedule`, `source_horizon` and `recurrence` must follow
+the pinned OpenAPI and Core version. A CLI preview does not mean the payload
+is schedulable; check Core read-back and materialized placements before
+considering any success.
+
+```sh
+# Validate the required payload envelope completely offline.
+tastile schedule publish --from-json ./local-schedule.json
+
+# Configure the local Core API, obtain a local test-account token through
+# the matching local Web auth flow, then explicitly write to isolated Core.
+TASTILE_API_URL=http://127.0.0.1:31400 \
+  tastile schedule publish --from-json ./local-schedule.json --apply \
+  --idempotency-key <stable-uuid>
+```
+
+The `--idempotency-key` is optional for a first request but **must be reused**
+for an uncertain retry. An omitted `--apply` never opens the credential store
+or network. Non-loopback `--apply` fails; an invalid payload also fails rather
+than being silently converted to a daily schedule. The old `regenerate`
+subcommand now returns an error rather than claiming to have regenerated.
+
+See [CLI acceptance and Muse shadow matrix](./docs/local-first-acceptance.md)
+for the outstanding integration checks.
 
 ## Architecture
 
@@ -111,10 +148,11 @@ HTTP shape. The drift gate in `crates/tastile-api/build.rs` enforces:
    the right method, path parameters, request body schema, required
    payload fields, and 200 response shape.
 
-The CLI surface covers **18 of the 21** operations in the pinned spec.
-The 3 admin operations (`delete_owner`, `export_owner`,
-`publish_schedule_definition`) are intentionally out of scope for the
-initial CLI and are not in the drift-gate contract table.
+The CLI surface covers **19 of the 21** operations in the pinned spec.
+The remaining 2 administrative operations (`delete_owner`, `export_owner`)
+are intentionally out of scope and not in the drift-gate contract table.
+The newly covered `publish_schedule_definition` operation requires a full
+OpenAPI payload and is only writable to a loopback Core in this local-first phase.
 
 The deeper `scripts/check-openapi-drift.sh` is the same check, run as a
 shell script so it can also run in CI on every PR and on a weekly cron.
