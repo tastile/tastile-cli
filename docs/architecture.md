@@ -115,12 +115,12 @@ The binary. Single `tokio` runtime, subcommand-dispatched.
 ### Write-target safety gate
 
 A loopback API base is ambiguous: it can be an isolated test stack or the
-operational Muse stack that owns the real schedule. `safety.rs` therefore
-applies the same rules to every write:
+operational Muse stack that owns the real schedule. `ApiConfig` rejects port
+31400 before any API request, including reads. `safety.rs` applies the
+remaining target rules to every write:
 
 | Target | Decision |
 | --- | --- |
-| Loopback, port 31400 | Refused — the Muse operational stack owns that port. |
 | Loopback, any other port | Allowed only with `TASTILE_ISOLATED_TEST_STACK=confirmed`. |
 | Remote, `http://` | Refused — plaintext remote API bases are rejected for reads and writes. |
 | Remote, `https://` | Allowed — the operator configured that host explicitly. |
@@ -137,13 +137,19 @@ prove isolation.
 
 ### Read completeness, diffs and revision conflicts
 
-- **Pagination.** The server applies its own default page size (100 rows
-  for source tiles). `tastile-api` walks the documented `limit` / `offset`
-  pagination for source-tile list, detail occurrences/placements, and
-  placements until a short page proves the end of the result set. The
+- **Pagination.** `tastile-api` follows cursor pages for source-tile list
+  and placements; source-tile detail independently pages occurrences and
+  placements. The cursor request/response shape is implemented ahead of the
+  pinned OpenAPI revision to match Core PRs #302 and #305. Legacy array
+  responses are decoded during the transition, but a full 500-row array
+  without a cursor fails explicitly because the client cannot prove it is
+  complete. No `offset` parameter is sent. The
   pinned `GET /v1/tiles` and pending-prompt list operations have no offset
   or cursor, so those projections cannot be proven complete when the
-  server applies a result cap; the CLI makes one contract-shaped request.
+  server applies a result cap; the CLI makes one contract-shaped request
+  and warns when `/v1/tiles` reaches the known 500-row cap. The pinned
+  OpenAPI submodule must not be bumped until the Core contract changes are
+  merged and published.
 - **Diffs.** `source-tiles update --dry-run` compares the stored source
   tile with the proposed draft and prints changed fields exposed by the
   read model: tile metadata, plan role, duration/priority, generation,
@@ -157,10 +163,13 @@ prove isolation.
   arrays when appropriate. Keep the original request-shaped plan, flows,
   horizon, relations and `source_client_local_id`: the read model cannot
   reconstruct them safely.
-- **Revision conflicts.** `--expect-revision` maps to the contract's
-  `expected_revision` envelope field. The server answers `409` when the
+- **Revision conflicts.** Update uses the revision from the read shown in
+  its diff; cancel and reflow fetch the current revision before mutation.
+  `--expect-revision` overrides that default. Each value maps to the
+  `expected_revision` envelope field; the server answers `409` when the
   stored revision moved on, and the CLI surfaces that conflict instead of
-  overwriting the change.
+  overwriting the change. Reflow always sends the field to remain compatible
+  with Core PR #302, which makes it mandatory.
 - **Impact preview and readback.** `cancel` / `reflow --dry-run` list the
   placements in scope; after a successful write the CLI reads the source
   tile and its placements back and prints the resulting state.

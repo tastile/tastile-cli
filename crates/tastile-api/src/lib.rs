@@ -38,6 +38,8 @@
 
 pub mod auth;
 pub mod client;
+#[cfg(test)]
+mod drift;
 pub mod error;
 pub mod executions;
 pub mod model;
@@ -64,8 +66,8 @@ pub use schedule::{
 };
 pub use source_tiles::{
     CancelSourceTilePayload, CancelSourceTileRequest, CreateSourceScheduleDefinition,
-    CreateSourceTilePayload, CreateSourceTileRequest, PlacementTileRead, RecurrenceView,
-    ReflowSourceTilePayload, ReflowSourceTileRequest, RelationDefinitionRead,
+    CreateSourceTilePayload, CreateSourceTileRequest, ListResponse, PlacementTileRead,
+    RecurrenceView, ReflowSourceTilePayload, ReflowSourceTileRequest, RelationDefinitionRead,
     SOURCE_TILE_PAGE_SIZE, SchedulePlanDefinition, ScheduleTileDefinition, SourceGeneration,
     SourceOccurrenceRead, SourceScheduleDefinition, SourceSplitPolicy, SourceTileCompletion,
     SourceTileDetailRead, SourceTileRead, SourceTileSummary, SourceWindow, Span, TemporalView,

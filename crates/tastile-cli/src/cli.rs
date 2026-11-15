@@ -249,7 +249,7 @@ pub enum SourceTilesCommand {
         /// Show the field-level diff against the stored source tile and stop.
         #[arg(long)]
         dry_run: bool,
-        /// Reject the write unless the source tile is still at this revision.
+        /// Override the freshly-read revision used to reject stale writes.
         #[arg(long, value_name = "N")]
         expect_revision: Option<i64>,
     },
@@ -262,7 +262,7 @@ pub enum SourceTilesCommand {
         /// Show the affected placements and stop.
         #[arg(long)]
         dry_run: bool,
-        /// Reject the write unless the source tile is still at this revision.
+        /// Override the freshly-read revision used to reject stale writes.
         #[arg(long, value_name = "N")]
         expect_revision: Option<i64>,
     },
@@ -290,7 +290,7 @@ pub enum SourceTilesCommand {
         /// Show the affected placements and stop.
         #[arg(long)]
         dry_run: bool,
-        /// Reject the write unless the source tile is still at this revision.
+        /// Override the freshly-read revision used to reject stale writes.
         #[arg(long, value_name = "N")]
         expect_revision: Option<i64>,
     },

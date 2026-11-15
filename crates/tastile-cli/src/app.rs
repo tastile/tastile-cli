@@ -20,7 +20,7 @@ use tastile_api::{
     StartExecutionRequest, TileListView, UpdateSourceTilePayload, UpdateSourceTileRequest,
     executions, source_tiles as api_source_tiles, tiles as api_tiles,
 };
-use tastile_auth::{CredentialStore, KeyringStore, StoredToken};
+use tastile_auth::{CredentialStore, KeyringStore};
 use tastile_config::Config;
 use uuid::Uuid;
 
@@ -35,6 +35,13 @@ pub struct AppContext {
     pub subject: Option<String>,
     credential_api_base_url: Option<String>,
     credential_expires_at: Option<DateTime<Utc>>,
+}
+
+/// Proof that the configured target and credential passed write preflight.
+/// Its private field prevents call sites from constructing a permit directly.
+#[derive(Debug)]
+pub struct WritePermit {
+    _private: (),
 }
 
 impl AppContext {
@@ -104,28 +111,6 @@ impl AppContext {
         }
         Ok(token)
     }
-
-    /// Probe `/v1/tiles` (a read-only endpoint) to check API reachability.
-    #[allow(dead_code)]
-    pub async fn probe(&self) -> Result<ProbeOutcome> {
-        let token = self.require_token()?;
-        match api_tiles::list_tiles(self, token, &api_tiles::ListTilesQuery::default()).await {
-            Ok(_) => Ok(ProbeOutcome::Ok),
-            Err(ApiError::Http {
-                status: 401 | 403, ..
-            }) => Ok(ProbeOutcome::Auth),
-            Err(ApiError::Http { status, .. }) => Ok(ProbeOutcome::HttpStatus(status)),
-            Err(e) => Err(anyhow!(e)),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-pub enum ProbeOutcome {
-    Ok,
-    Auth,
-    HttpStatus(u16),
 }
 
 /// Environment variable that points at a file-backed credential.
@@ -180,9 +165,29 @@ pub async fn list_tiles(
     query: api_tiles::ListTilesQuery,
 ) -> Result<Vec<TileListView>> {
     let token = ctx.require_token()?;
-    api_tiles::list_tiles(ctx, token, &query)
+    let tiles = api_tiles::list_tiles(ctx, token, &query)
         .await
-        .context("list_tiles failed")
+        .context("list_tiles failed")?;
+    report_tiles_result_cap(tiles.len(), query.limit);
+    Ok(tiles)
+}
+
+const TILE_LIST_SERVER_CAP: usize = 500;
+static TILE_LIST_CAP_WARNING: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+fn tiles_result_reached_server_cap(rows: usize, requested_limit: Option<i64>) -> bool {
+    requested_limit.unwrap_or(TILE_LIST_SERVER_CAP as i64) >= TILE_LIST_SERVER_CAP as i64
+        && rows == TILE_LIST_SERVER_CAP
+}
+
+fn report_tiles_result_cap(rows: usize, requested_limit: Option<i64>) {
+    if tiles_result_reached_server_cap(rows, requested_limit)
+        && TILE_LIST_CAP_WARNING.set(()).is_ok()
+    {
+        tracing::warn!(
+            "GET /v1/tiles returned the server cap of {TILE_LIST_SERVER_CAP} rows; this endpoint has no cursor, so more results may exist"
+        );
+    }
 }
 
 /// Sorted view of the current tiles.
@@ -199,6 +204,7 @@ pub async fn today(ctx: &AppContext) -> Result<Vec<TileListView>> {
     let mut tiles = api_tiles::list_tiles(ctx, token, &query)
         .await
         .context("list_tiles failed")?;
+    report_tiles_result_cap(tiles.len(), query.limit);
     // The CLI surfaces a "next actionable" view by sorting on
     // projected_next_start_at ascending, treating None as far future.
     tiles.sort_by(|a, b| {
@@ -223,6 +229,7 @@ pub async fn next_actionable(ctx: &AppContext) -> Result<Option<TileListView>> {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateSourceTileDraft {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -299,7 +306,8 @@ impl CreateSourceTileDraft {
 /// in server-required shapes with sensible minimal defaults. The CLI does
 /// not try to compute schedule plans; users supply planning JSON when they
 /// need anything non-trivial.
-pub fn build_create_request(draft: &CreateSourceTileDraft) -> CreateSourceTileRequest {
+pub fn build_create_request(draft: &CreateSourceTileDraft) -> Result<CreateSourceTileRequest> {
+    validate_plan_role(draft)?;
     let tile = ScheduleTileDefinition {
         title: draft.title.clone(),
         description: draft.description.clone(),
@@ -369,7 +377,23 @@ pub fn build_create_request(draft: &CreateSourceTileDraft) -> CreateSourceTileRe
         relations: draft.relations.clone(),
         source_client_local_id: draft.source_client_local_id,
     };
-    CreateSourceTileRequest::new(payload)
+    Ok(CreateSourceTileRequest::new(payload))
+}
+
+fn validate_plan_role(draft: &CreateSourceTileDraft) -> Result<()> {
+    if let Some(value) = draft.plan.as_ref().and_then(|plan| plan.get("role")) {
+        let role = value
+            .as_i64()
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| anyhow!("draft `plan.role` must be an int32"))?;
+        if role != draft.plan_role {
+            bail!(
+                "draft `plan.role` ({role}) disagrees with top-level `plan_role` ({}); make them match or omit `plan.role`",
+                draft.plan_role
+            );
+        }
+    }
+    Ok(())
 }
 
 /// CLI-level wrapper for `create_source_tile` that takes a draft.
@@ -377,24 +401,33 @@ pub async fn create_source_tile_draft(
     ctx: &AppContext,
     draft: &CreateSourceTileDraft,
 ) -> Result<CommandResponse> {
+    let req = build_create_request(draft)?;
     guard_write(ctx).await?;
     let token = ctx.require_token()?;
-    let req = build_create_request(draft);
     api_source_tiles::create_source_tile(ctx, token, &req)
         .await
         .context("create_source_tile failed")
 }
 
-/// CLI-level wrapper for `update_source_tile` that takes a draft.
-pub async fn update_source_tile_draft(
+pub(crate) async fn update_source_tile_draft_with_permit(
     ctx: &AppContext,
     id: Uuid,
     draft: &CreateSourceTileDraft,
     expected_revision: Option<i64>,
+    _permit: &WritePermit,
 ) -> Result<CommandResponse> {
-    guard_write(ctx).await?;
     let token = ctx.require_token()?;
-    let create_payload = build_create_request(draft).payload;
+    let revision = match expected_revision {
+        Some(revision) => revision,
+        None => {
+            api_source_tiles::get_source_tile(ctx, token, id)
+                .await
+                .context("fetching source tile revision before update failed")?
+                .source
+                .revision
+        }
+    };
+    let create_payload = build_create_request(draft)?.payload;
     let payload = UpdateSourceTilePayload {
         tile: create_payload.tile,
         plan: create_payload.plan,
@@ -404,10 +437,7 @@ pub async fn update_source_tile_draft(
         relations: create_payload.relations,
         source_client_local_id: create_payload.source_client_local_id,
     };
-    let mut req = UpdateSourceTileRequest::new(payload);
-    if let Some(revision) = expected_revision {
-        req = req.with_expected_revision(revision);
-    }
+    let req = UpdateSourceTileRequest::new(payload).with_expected_revision(revision);
     api_source_tiles::update_source_tile(ctx, token, id, &req)
         .await
         .context("update_source_tile failed")
@@ -438,20 +468,22 @@ pub async fn list_source_tiles(
 ///    endpoint with the stored credential. This proves the URL points at a
 ///    Tastile v1 API that accepts this account; it does *not* prove the
 ///    stack is isolated, which only the operator can attest.
-pub async fn guard_write(ctx: &AppContext) -> Result<()> {
+pub async fn guard_write(ctx: &AppContext) -> Result<WritePermit> {
     let target =
         crate::safety::classify_write_target(&ctx.config, crate::safety::isolation_attested())?;
-    verify_write_target(ctx, target).await
+    verify_write_target(ctx, target).await?;
+    Ok(WritePermit { _private: () })
 }
 
 /// The schedule publisher has an additional local-Core-only restriction
 /// from the repository's acceptance contract.
-pub async fn guard_schedule_publish_write(ctx: &AppContext) -> Result<()> {
+pub async fn guard_schedule_publish_write(ctx: &AppContext) -> Result<WritePermit> {
     let target = crate::safety::classify_schedule_publish_target(
         &ctx.config,
         crate::safety::isolation_attested(),
     )?;
-    verify_write_target(ctx, target).await
+    verify_write_target(ctx, target).await?;
+    Ok(WritePermit { _private: () })
 }
 
 async fn verify_write_target(ctx: &AppContext, target: crate::safety::WriteTarget) -> Result<()> {
@@ -516,29 +548,41 @@ pub async fn cancel_source_tile(
     reason_code: i32,
     expected_revision: Option<i64>,
 ) -> Result<CommandResponse> {
-    guard_write(ctx).await?;
+    let permit = guard_write(ctx).await?;
+    cancel_source_tile_with_permit(ctx, id, reason_code, expected_revision, &permit).await
+}
+
+pub(crate) async fn cancel_source_tile_with_permit(
+    ctx: &AppContext,
+    id: Uuid,
+    reason_code: i32,
+    expected_revision: Option<i64>,
+    _permit: &WritePermit,
+) -> Result<CommandResponse> {
     let token = ctx.require_token()?;
-    let mut req = CancelSourceTileRequest::new(reason_code);
-    if let Some(revision) = expected_revision {
-        req = req.with_expected_revision(revision);
-    }
+    let current = api_source_tiles::get_source_tile(ctx, token, id)
+        .await
+        .context("fetching source tile revision before cancel failed")?;
+    let revision = effective_expected_revision(expected_revision, current.source.revision);
+    let req = CancelSourceTileRequest::new(reason_code).with_expected_revision(revision);
     api_source_tiles::cancel_source_tile(ctx, token, id, &req)
         .await
         .context("cancel_source_tile failed")
 }
 
-pub async fn reflow_source_tile(
+pub(crate) async fn reflow_source_tile_with_permit(
     ctx: &AppContext,
     id: Uuid,
     range: Span,
     expected_revision: Option<i64>,
+    _permit: &WritePermit,
 ) -> Result<CommandResponse> {
-    guard_write(ctx).await?;
     let token = ctx.require_token()?;
-    let mut req = ReflowSourceTileRequest::new(range);
-    if let Some(revision) = expected_revision {
-        req = req.with_expected_revision(revision);
-    }
+    let current = api_source_tiles::get_source_tile(ctx, token, id)
+        .await
+        .context("fetching source tile revision before reflow failed")?;
+    let revision = effective_expected_revision(expected_revision, current.source.revision);
+    let req = ReflowSourceTileRequest::new(range).with_expected_revision(revision);
     api_source_tiles::reflow_source_tile(ctx, token, id, &req)
         .await
         .context("reflow_source_tile failed")
@@ -849,13 +893,16 @@ pub async fn read_back(ctx: &AppContext, id: Uuid) -> Result<SourceTileState> {
     let detail = api_source_tiles::get_source_tile(ctx, token, id)
         .await
         .context("get_source_tile failed")?;
-    let placements = api_source_tiles::list_all_source_tile_placements(ctx, token, id).await?;
     Ok(SourceTileState {
         revision: detail.source.revision,
         source_state: detail.source.source_state,
-        placements_total: placements.len(),
-        placements_open: placements.iter().filter(|p| !p.closed).count(),
+        placements_total: detail.placements.len(),
+        placements_open: detail.placements.iter().filter(|p| !p.closed).count(),
     })
+}
+
+fn effective_expected_revision(override_revision: Option<i64>, current_revision: i64) -> i64 {
+    override_revision.unwrap_or(current_revision)
 }
 
 // ---------------------------------------------------------------------------
@@ -1009,11 +1056,6 @@ pub async fn respond_startup_recovery(
         .context("respond_startup_recovery failed")
 }
 
-/// Re-export of `StoredToken` so callers don't have to depend on
-/// `tastile_auth` directly.
-#[allow(dead_code)]
-pub type Token = StoredToken;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1059,12 +1101,52 @@ mod tests {
     #[test]
     fn build_create_request_fills_minimal_plan() {
         let draft = CreateSourceTileDraft::minimal("test");
-        let req = build_create_request(&draft);
+        let req = build_create_request(&draft).unwrap();
         assert_eq!(req.payload.tile.title, "test");
         assert_eq!(req.payload.horizon.start, draft.horizon_start);
         let json = serde_json::to_value(&req).unwrap();
         assert!(json["idempotency_key"].is_string());
         assert_eq!(json["payload"]["schedule"]["priority"], 0);
+    }
+
+    #[test]
+    fn create_draft_rejects_unknown_fields_instead_of_ignoring_typos() {
+        let draft = CreateSourceTileDraft::minimal("test");
+        let mut value = serde_json::to_value(draft).unwrap();
+        value["horizion_start"] = value["horizon_start"].clone();
+
+        assert!(serde_json::from_value::<CreateSourceTileDraft>(value).is_err());
+    }
+
+    #[test]
+    fn plan_role_must_match_the_top_level_plan_role() {
+        let mut draft = CreateSourceTileDraft::minimal("test");
+        draft.plan = Some(serde_json::json!({
+            "role": 1,
+            "completion": {},
+            "planning": {},
+            "metrics": [],
+            "decisions": [],
+            "references": []
+        }));
+        assert!(validate_plan_role(&draft).is_err());
+
+        draft.plan_role = 1;
+        assert!(validate_plan_role(&draft).is_ok());
+    }
+
+    #[test]
+    fn write_revision_uses_fresh_read_by_default_and_flag_as_override() {
+        assert_eq!(effective_expected_revision(None, 41), 41);
+        assert_eq!(effective_expected_revision(Some(7), 41), 7);
+    }
+
+    #[test]
+    fn only_default_or_maximum_tile_lists_warn_when_the_cap_is_reached() {
+        assert!(tiles_result_reached_server_cap(500, None));
+        assert!(tiles_result_reached_server_cap(500, Some(900)));
+        assert!(!tiles_result_reached_server_cap(499, None));
+        assert!(!tiles_result_reached_server_cap(10, Some(10)));
     }
 
     #[test]

@@ -13,13 +13,13 @@ attempt in `auth logout`) passes the same write gate before a request leaves
 the process. `auth logout` still removes the local credential if revocation
 is refused or the API is unavailable:
 
-1. **Target classification**
+1. **API-base validation and target classification**
+   - API base port **31400** is refused by the HTTP client for every request,
+     including reads, before it can connect.
    - A loopback API (`127.0.0.1`, `localhost`, `::1`) is *ambiguous*: it
      can be an isolated test stack or the operational Muse stack. Writes to
      loopback are refused unless `TASTILE_ISOLATED_TEST_STACK=confirmed`
      is set.
-   - Port **31400** is reserved for the Muse operational stack and is
-     refused on every host, loopback or not.
    - A remote API base must use **HTTPS**; plaintext remote APIs are refused for reads and writes.
 2. **Identity probe** — the target must answer a documented read endpoint
    (`GET /v1/source-tiles`) with the stored credential. The CLI also checks
@@ -40,8 +40,7 @@ isolation checklist.
 ## Reading
 
 ```sh
-# every source tile of the owner (the CLI walks the documented
-# limit/offset pagination, so the server's 100-row default never truncates)
+# every source tile of the owner (the CLI follows every cursor page)
 tastile source-tiles list
 
 # one source tile with its occurrences and placements
@@ -59,9 +58,20 @@ tastile tiles --search "rust" --json
 `GET /v1/tiles` supports `owner_ids`, `limit`, `view_mode`, `lifecycle`,
 `range`, `granularity`, `search` and `exclude_future`, but has no offset or
 cursor. `tastile tiles` and `tastile today` therefore make one request and
-cannot guarantee a complete result if Core caps it. `prompts list` likewise
-has no pagination parameters in the pinned contract. The source-tile list,
-source-tile detail and placements commands do walk their documented pages.
+cannot guarantee a complete result if Core caps it; the CLI warns when the
+500-row cap is reached. `prompts list` likewise has no pagination parameters
+in the pinned contract. Source-tile list and placements follow `cursor` pages;
+source-tile detail independently follows `occurrence_cursor` and
+`placement_cursor`, with `occurrence_limit` and `placement_limit`.
+
+The cursor request/response shape is implemented ahead of the pinned OpenAPI
+revision to match Core PRs [#302](https://github.com/tastile/tastile-core/pull/302)
+and [#305](https://github.com/tastile/tastile-core/pull/305). The submodule
+pin remains unchanged until those contracts are merged and published. The
+client accepts legacy array responses while the transition is in progress;
+if an old server returns a full 500-row array without a cursor, it reports
+that completeness cannot be proven instead of silently returning a truncated
+list. No `offset` parameter is sent.
 
 ## Writing
 
@@ -111,13 +121,16 @@ For full control, `--from-json` takes a draft document; see
 # show what would change, without writing
 tastile source-tiles update <id> --from-json ./draft.json --dry-run
 
-# write, but only if the source tile is still at revision 12
+# write, overriding the revision read by the CLI with revision 12
 tastile source-tiles update <id> --from-json ./draft.json --expect-revision 12
 ```
 
 `--expect-revision` maps to the contract's `expected_revision` envelope
-field. When the stored revision moved on, the server answers `409` and the
-CLI reports the conflict instead of overwriting someone else's change:
+field. By default, update uses the revision from the source-tile read shown
+in its diff; cancel and reflow fetch the current revision before sending the
+mutation. The optional flag overrides that value. When the stored revision
+moved on, the server answers `409` and the CLI reports the conflict instead
+of overwriting someone else's change:
 
 ```text
 error: update_source_tile failed: http 409: {"kind":"Conflict",
@@ -237,7 +250,7 @@ PostgreSQL, and every command re-reads it from the server.
 
 | Message | Meaning |
 | --- | --- |
-| `refusing to write to API …: port 31400 is reserved …` | The operational Muse stack was targeted. Pick an isolated port. |
+| `invalid base url: API base URL may not use reserved operational port 31400` | The operational Muse port was targeted; all requests are refused. Pick another port. |
 | `no isolated test-stack confirmation for API …` | Loopback target without `TASTILE_ISOLATED_TEST_STACK=confirmed`. |
 | `the write target … rejected the stored credential (HTTP 401)` | The stored token is not valid for that target. |
 | `the stored credential belongs to a different API base …` | Re-login for the configured API; the CLI will not reuse the token at a different base. |

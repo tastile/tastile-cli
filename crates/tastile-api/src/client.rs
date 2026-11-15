@@ -19,8 +19,8 @@ use url::{Host, Url};
 
 use crate::error::{ApiError, ApiResult};
 
-/// Raw bearer token. Construction goes through [`BearerToken::new`] which
-/// enforces non-empty; never log this value.
+/// Raw bearer token. Construction does not validate token contents; never log
+/// this value.
 #[derive(Clone)]
 pub struct BearerToken(String);
 
@@ -61,6 +61,16 @@ impl ApiConfig {
     pub fn new(base_url: &str) -> ApiResult<Self> {
         let url = Url::parse(base_url.trim_end_matches('/'))
             .map_err(|e| ApiError::InvalidBaseUrl(format!("invalid API base URL: {e}")))?;
+        if url.port() == Some(31_400) {
+            return Err(ApiError::InvalidBaseUrl(
+                "API base URL may not use reserved operational port 31400".into(),
+            ));
+        }
+        if url.path() != "/" {
+            return Err(ApiError::InvalidBaseUrl(
+                "API base URL must not contain a path component".into(),
+            ));
+        }
         if !url.username().is_empty()
             || url.password().is_some()
             || url.query().is_some()
@@ -350,6 +360,24 @@ mod tests {
         // paths via `Url::join`, which canonicalises the slash for us.
         let cfg = ApiConfig::new("https://example.test/").expect("valid url");
         assert!(cfg.base_url.as_str().starts_with("https://example.test"));
+    }
+
+    #[test]
+    fn api_config_refuses_reserved_operational_port_for_every_request() {
+        for base in [
+            "http://127.0.0.1:31400",
+            "https://localhost:31400",
+            "https://api.example.test:31400",
+        ] {
+            let error = ApiConfig::new(base).expect_err("reserved port must be rejected");
+            assert!(error.to_string().contains("31400"), "{base}: {error}");
+        }
+    }
+
+    #[test]
+    fn api_config_rejects_path_components() {
+        assert!(ApiConfig::new("https://api.example.test/v1").is_err());
+        assert!(ApiConfig::new("https://api.example.test/").is_ok());
     }
 
     #[test]

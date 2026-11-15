@@ -124,9 +124,11 @@ for the outstanding integration checks.
 
 The same gate protects **every** write, not only `schedule publish`:
 
+`ApiConfig` refuses API base port 31400 for **all** requests, including
+read-only commands, before opening a connection.
+
 | Target | Decision |
 | --- | --- |
-| Loopback on port 31400 | Refused — the Muse operational stack owns that port. |
 | Any other loopback target | Allowed only with `TASTILE_ISOLATED_TEST_STACK=confirmed`. |
 | Remote `http://` | Refused — remote API bases must use HTTPS for reads and writes. |
 | Remote `https://` | Allowed for ordinary API writes when explicitly configured; `schedule publish --apply` remains loopback-only. |
@@ -143,8 +145,11 @@ See [docs/cli-operations.md](./docs/cli-operations.md) for the full
 operation guide, expected error messages and a safe stop/resume procedure.
 The pinned `GET /v1/tiles` and pending-prompt list endpoints have no offset
 or cursor, so those views make one request and cannot guarantee completeness
-if Core applies a result cap. Source-tile lists, details and placements use
-the documented `limit` / `offset` pagination.
+if Core applies a result cap. The CLI warns when `/v1/tiles` reaches its
+current 500-row cap. Source-tile list, detail and placements use the cursor
+contract from Core PRs #302/#305 ahead of the OpenAPI pin; the pin is pending
+Core merge and publication. Legacy array responses still decode, but a full
+500-row legacy page fails explicitly because it cannot prove completeness.
 
 ## Architecture
 

@@ -10,6 +10,7 @@
 //! The trait exists so tests can substitute a deterministic in-memory store.
 
 use std::fmt;
+use std::io::Write;
 
 use thiserror::Error;
 
@@ -139,6 +140,31 @@ impl FileCredentialStore {
     }
 }
 
+fn open_private_file(path: &std::path::Path) -> Result<std::fs::File, CredentialError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(path)
+        .map_err(|e| CredentialError::Backend(format!("opening {}: {e}", path.display())))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| {
+                CredentialError::Backend(format!(
+                    "restricting permissions on {} before writing: {e}",
+                    path.display()
+                ))
+            })?;
+    }
+    Ok(file)
+}
+
 impl CredentialStore for FileCredentialStore {
     fn load(&self, _service: &str, _user: &str) -> Result<Option<StoredToken>, CredentialError> {
         if !self.path.exists() {
@@ -168,21 +194,10 @@ impl CredentialStore for FileCredentialStore {
         }
         let serialized =
             serde_json::to_string(token).map_err(|e| CredentialError::Malformed(e.to_string()))?;
-        std::fs::write(&self.path, serialized).map_err(|e| {
+        let mut file = open_private_file(&self.path)?;
+        file.write_all(serialized.as_bytes()).map_err(|e| {
             CredentialError::Backend(format!("writing {}: {e}", self.path.display()))
         })?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600)).map_err(
-                |e| {
-                    CredentialError::Backend(format!(
-                        "restricting permissions on {}: {e}",
-                        self.path.display()
-                    ))
-                },
-            )?;
-        }
         Ok(())
     }
 
@@ -305,5 +320,20 @@ mod tests {
         let debug = format!("{token:?}");
         assert!(!debug.contains("do-not-print-this-token"));
         assert!(debug.contains("[REDACTED]"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credential_file_is_private_at_open_before_token_bytes_are_written() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path =
+            std::env::temp_dir().join(format!("tastile-credential-{}", uuid::Uuid::new_v4()));
+        let file = open_private_file(&path).expect("open private credential file");
+        let mode = file.metadata().unwrap().permissions().mode() & 0o777;
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+
+        assert_eq!(mode, 0o600);
     }
 }

@@ -19,8 +19,8 @@ pub enum ApiError {
     #[error("transport: {0}")]
     Transport(#[from] reqwest::Error),
 
-    /// Server returned non-2xx. The body is included for `tracing` but never
-    /// printed to the user (credentials may be present in some responses).
+    /// Server returned non-2xx. The response body is included in the error
+    /// message and may be shown to the user; servers must not echo credentials.
     #[error("http {status}: {message}")]
     Http { status: u16, message: String },
 

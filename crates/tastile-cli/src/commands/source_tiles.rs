@@ -270,12 +270,14 @@ async fn update(
     };
     let draft =
         load_update_draft(&path).context("could not load full replacement --from-json draft")?;
-    if !dry_run {
+    let permit = if !dry_run {
         // Refuse ambiguous/operational targets before the authenticated
-        // pre-read used to build the diff. The service wrapper checks again
-        // immediately before sending the mutation.
-        app::guard_write(ctx).await?;
-    }
+        // pre-read used to build the diff. The permit is then reused for the
+        // mutation so the expensive identity probe runs only once.
+        Some(app::guard_write(ctx).await?)
+    } else {
+        None
+    };
     let current = app::show_source_tile(ctx, id).await?;
     let diffs = app::diff_source_tile(&draft, &current.source);
     output::print_diff(&diffs);
@@ -287,7 +289,10 @@ async fn update(
         println!("Dry run: no write sent.");
         return Ok(ExitCode::SUCCESS);
     }
-    let resp = app::update_source_tile_draft(ctx, id, &draft, expect_revision).await?;
+    let permit = permit.ok_or_else(|| anyhow!("update apply requires write preflight"))?;
+    let revision = expect_revision.unwrap_or(current.source.revision);
+    let resp =
+        app::update_source_tile_draft_with_permit(ctx, id, &draft, Some(revision), &permit).await?;
     println!("✓ Updated source tile.");
     output::print_command_response(&resp);
     output::print_readback(&app::read_back(ctx, id).await?);
@@ -301,17 +306,21 @@ async fn cancel(
     dry_run: bool,
     expect_revision: Option<i64>,
 ) -> Result<ExitCode> {
-    if !dry_run {
+    let permit = if !dry_run {
         // Gate the target before reading the impact preview on an apply path.
-        app::guard_write(ctx).await?;
-    }
+        Some(app::guard_write(ctx).await?)
+    } else {
+        None
+    };
     let impact = app::placement_impact(ctx, id, None).await?;
     output::print_impact("cancel", &impact);
     if dry_run {
         println!("Dry run: no write sent.");
         return Ok(ExitCode::SUCCESS);
     }
-    let resp = app::cancel_source_tile(ctx, id, reason_code, expect_revision).await?;
+    let permit = permit.ok_or_else(|| anyhow!("cancel apply requires write preflight"))?;
+    let resp =
+        app::cancel_source_tile_with_permit(ctx, id, reason_code, expect_revision, &permit).await?;
     println!("✓ Cancelled source tile.");
     output::print_command_response(&resp);
     output::print_readback(&app::read_back(ctx, id).await?);
@@ -321,9 +330,12 @@ async fn cancel(
 async fn completion(ctx: &AppContext, id: Uuid, json: bool) -> Result<ExitCode> {
     let v = app::source_tile_completion(ctx, id).await?;
     // Completion is opaque nested JSON (tasks + time_requirements tree);
-    // we always pretty-print it. `--json` is accepted for symmetry.
-    let _ = json;
-    println!("{}", serde_json::to_string_pretty(&v)?);
+    // keep the machine-readable mode compact for piping.
+    if json {
+        println!("{}", serde_json::to_string(&v)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&v)?);
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -353,17 +365,20 @@ async fn reflow(
     if from >= to {
         bail!("--from must be earlier than --to");
     }
-    if !dry_run {
+    let permit = if !dry_run {
         // Gate the target before reading the impact preview on an apply path.
-        app::guard_write(ctx).await?;
-    }
+        Some(app::guard_write(ctx).await?)
+    } else {
+        None
+    };
     let impact = app::placement_impact(ctx, id, Some((from, to))).await?;
     output::print_impact("reflow", &impact);
     if dry_run {
         println!("Dry run: no write sent.");
         return Ok(ExitCode::SUCCESS);
     }
-    let resp = app::reflow_source_tile(
+    let permit = permit.ok_or_else(|| anyhow!("reflow apply requires write preflight"))?;
+    let resp = app::reflow_source_tile_with_permit(
         ctx,
         id,
         tastile_api::Span {
@@ -371,6 +386,7 @@ async fn reflow(
             end: to,
         },
         expect_revision,
+        &permit,
     )
     .await?;
     println!("✓ Reflow dispatched.");
@@ -386,7 +402,9 @@ fn load_draft(path: &str) -> Result<CreateSourceTileDraft> {
 fn load_update_draft(path: &str) -> Result<CreateSourceTileDraft> {
     let value = read_draft_value(path)?;
     validate_full_update_draft(&value)?;
-    Ok(serde_json::from_value(value)?)
+    let draft = serde_json::from_value(value)?;
+    app::build_create_request(&draft)?;
+    Ok(draft)
 }
 
 fn read_draft_value(path: &str) -> Result<Value> {

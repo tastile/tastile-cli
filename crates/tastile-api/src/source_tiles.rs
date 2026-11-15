@@ -15,8 +15,10 @@
 //! operationIds still exist with the right method, path, body schema,
 //! response schema, path parameters, and required envelope fields.
 
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
 use crate::client::{ApiClient, BearerToken};
@@ -196,6 +198,67 @@ pub struct SourceTileDetailRead {
     pub placements: Vec<PlacementTileRead>,
 }
 
+/// Canonical cursor page from Core. The untagged decoder also accepts the
+/// pinned pre-cursor array response while the OpenAPI revision is pending.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ListResponse<T> {
+    pub items: Vec<T>,
+    /// Number of items in this page (not the total result count).
+    pub count: usize,
+    pub next_cursor: Option<String>,
+    #[serde(skip)]
+    legacy_array: bool,
+}
+
+impl<'de, T> Deserialize<'de> for ListResponse<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Page<T> {
+            Cursor {
+                items: Vec<T>,
+                count: usize,
+                #[serde(default)]
+                next_cursor: Option<String>,
+            },
+            Legacy(Vec<T>),
+        }
+
+        match Page::deserialize(deserializer)? {
+            Page::Cursor {
+                items,
+                count,
+                next_cursor,
+            } => Ok(Self {
+                items,
+                count,
+                next_cursor,
+                legacy_array: false,
+            }),
+            Page::Legacy(items) => Ok(Self {
+                count: items.len(),
+                items,
+                next_cursor: None,
+                legacy_array: true,
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct SourceTileDetailPage {
+    source: SourceTileRead,
+    relations: Vec<RelationDefinitionRead>,
+    occurrences: ListResponse<SourceOccurrenceRead>,
+    placements: ListResponse<PlacementTileRead>,
+}
+
 // ---------------------------------------------------------------------------
 // Operations.
 // ---------------------------------------------------------------------------
@@ -206,8 +269,8 @@ pub struct SourceTileDetailRead {
 pub struct ListSourceTilesQuery {
     pub owner_id: Option<Uuid>,
     pub limit: Option<u32>,
-    /// Rows to skip. The server defaults to `0` and caps `limit` at 500.
-    pub offset: Option<u32>,
+    /// Opaque keyset cursor returned by the previous page.
+    pub cursor: Option<String>,
 }
 
 impl ListSourceTilesQuery {
@@ -219,76 +282,64 @@ impl ListSourceTilesQuery {
         if let Some(v) = self.limit {
             out.push(("limit", v.to_string()));
         }
-        if let Some(v) = self.offset {
-            out.push(("offset", v.to_string()));
+        if let Some(v) = &self.cursor {
+            out.push(("cursor", v.clone()));
         }
         out
     }
 }
 
-/// Largest page the pinned contract allows for the source-tile listings
-/// (`limit` is documented as `1..500`).
+/// A page size accepted by both the pinned contract and the pending cursor
+/// contract (`1..=1000`).
 pub const SOURCE_TILE_PAGE_SIZE: u32 = 500;
-
-/// Advance to the next page while respecting the OpenAPI `int32` offset.
-fn next_page_offset(offset: u32, page_len: usize) -> ApiResult<u32> {
-    let page_len = u32::try_from(page_len).map_err(|_| {
-        crate::error::ApiError::Pagination(
-            "source-tile pagination page length exceeds the contract limit".into(),
-        )
-    })?;
-    let next = offset.checked_add(page_len).ok_or_else(|| {
-        crate::error::ApiError::Pagination(
-            "source-tile pagination offset exceeded the contract limit".into(),
-        )
-    })?;
-    if next > i32::MAX as u32 {
-        return Err(crate::error::ApiError::Pagination(
-            "source-tile pagination offset exceeded the contract int32 limit".into(),
-        ));
-    }
-    Ok(next)
-}
 
 /// `GET /v1/source-tiles` → `operationId: list_source_tiles`.
 pub async fn list_source_tiles(
     client: &ApiClient,
     token: &BearerToken,
     q: &ListSourceTilesQuery,
-) -> ApiResult<Vec<SourceTileRead>> {
+) -> ApiResult<ListResponse<SourceTileRead>> {
     client
         .get_json(token, "/v1/source-tiles", &q.to_pairs())
         .await
 }
 
-/// Fetch **every** source tile of the owner by walking the documented
-/// `limit` / `offset` pagination.
-///
-/// The server applies its own default page size (100 rows) when `limit` is
-/// omitted, so a single request silently truncates large owners. This
-/// helper keeps requesting pages until a short page proves the end of the
-/// result set.
+/// Fetch every source-tile page until Core returns no `next_cursor`.
 pub async fn list_all_source_tiles(
     client: &ApiClient,
     token: &BearerToken,
     q: &ListSourceTilesQuery,
 ) -> ApiResult<Vec<SourceTileRead>> {
     let mut out: Vec<SourceTileRead> = Vec::new();
-    let mut offset: u32 = 0;
+    let mut cursor = q.cursor.clone();
+    let mut seen = HashSet::new();
+    if let Some(first) = &cursor {
+        seen.insert(first.clone());
+    }
     loop {
         let page_query = ListSourceTilesQuery {
             limit: Some(SOURCE_TILE_PAGE_SIZE),
-            offset: Some(offset),
+            cursor,
             ..q.clone()
         };
         let page = list_source_tiles(client, token, &page_query).await?;
-        let page_len = page.len();
-        out.extend(page);
-        if page_len < SOURCE_TILE_PAGE_SIZE as usize {
-            return Ok(out);
+        if page.legacy_array && page.items.len() >= SOURCE_TILE_PAGE_SIZE as usize {
+            return Err(crate::error::ApiError::Pagination(
+                "legacy source-tile response filled the page; cursor pagination is required to prove completeness".into(),
+            ));
         }
-        offset = next_page_offset(offset, page_len)?;
+        out.extend(page.items);
+        let Some(next_cursor) = page.next_cursor else {
+            break;
+        };
+        if !seen.insert(next_cursor.clone()) {
+            return Err(crate::error::ApiError::Pagination(
+                "source-tile list returned a repeated cursor".into(),
+            ));
+        }
+        cursor = Some(next_cursor);
     }
+    Ok(out)
 }
 
 /// `GET /v1/source-tiles/{id}` → `operationId: get_source_tile`.
@@ -298,23 +349,75 @@ pub async fn get_source_tile(
     id: Uuid,
 ) -> ApiResult<SourceTileDetailRead> {
     let mut combined: Option<SourceTileDetailRead> = None;
-    let mut offset = 0_u32;
+    let mut occurrence_cursor = None;
+    let mut placement_cursor = None;
+    let mut occurrence_done = false;
+    let mut placement_done = false;
+    let mut seen_occurrence_cursors = HashSet::new();
+    let mut seen_placement_cursors = HashSet::new();
     loop {
-        let page = get_source_tile_page(client, token, id, SOURCE_TILE_PAGE_SIZE, offset).await?;
-        let occurrence_count = page.occurrences.len();
-        let placement_count = page.placements.len();
-        if let Some(detail) = combined.as_mut() {
-            detail.occurrences.extend(page.occurrences);
-            detail.placements.extend(page.placements);
-        } else {
-            combined = Some(page);
+        let page = get_source_tile_page(
+            client,
+            token,
+            id,
+            occurrence_cursor.as_deref(),
+            placement_cursor.as_deref(),
+        )
+        .await?;
+        let detail = combined.get_or_insert_with(|| SourceTileDetailRead {
+            source: page.source.clone(),
+            relations: page.relations.clone(),
+            occurrences: Vec::new(),
+            placements: Vec::new(),
+        });
+
+        if !occurrence_done {
+            if page.occurrences.legacy_array
+                && page.occurrences.items.len() >= SOURCE_TILE_PAGE_SIZE as usize
+            {
+                return Err(crate::error::ApiError::Pagination(
+                    "legacy source-tile detail occurrences filled the page; cursor pagination is required to prove completeness".into(),
+                ));
+            }
+            detail.occurrences.extend(page.occurrences.items);
+            match page.occurrences.next_cursor {
+                Some(next) if seen_occurrence_cursors.insert(next.clone()) => {
+                    occurrence_cursor = Some(next);
+                }
+                Some(_) => {
+                    return Err(crate::error::ApiError::Pagination(
+                        "source-tile detail returned a repeated occurrence cursor".into(),
+                    ));
+                }
+                None => occurrence_done = true,
+            }
         }
-        if occurrence_count < SOURCE_TILE_PAGE_SIZE as usize
-            && placement_count < SOURCE_TILE_PAGE_SIZE as usize
-        {
-            return Ok(combined.expect("a page was fetched"));
+
+        if !placement_done {
+            if page.placements.legacy_array
+                && page.placements.items.len() >= SOURCE_TILE_PAGE_SIZE as usize
+            {
+                return Err(crate::error::ApiError::Pagination(
+                    "legacy source-tile detail placements filled the page; cursor pagination is required to prove completeness".into(),
+                ));
+            }
+            detail.placements.extend(page.placements.items);
+            match page.placements.next_cursor {
+                Some(next) if seen_placement_cursors.insert(next.clone()) => {
+                    placement_cursor = Some(next);
+                }
+                Some(_) => {
+                    return Err(crate::error::ApiError::Pagination(
+                        "source-tile detail returned a repeated placement cursor".into(),
+                    ));
+                }
+                None => placement_done = true,
+            }
         }
-        offset = next_page_offset(offset, SOURCE_TILE_PAGE_SIZE as usize)?;
+
+        if occurrence_done && placement_done {
+            return Ok(combined.expect("a detail page was fetched"));
+        }
     }
 }
 
@@ -322,17 +425,21 @@ async fn get_source_tile_page(
     client: &ApiClient,
     token: &BearerToken,
     id: Uuid,
-    limit: u32,
-    offset: u32,
-) -> ApiResult<SourceTileDetailRead> {
+    occurrence_cursor: Option<&str>,
+    placement_cursor: Option<&str>,
+) -> ApiResult<SourceTileDetailPage> {
     let path = format!("/v1/source-tiles/{id}");
-    client
-        .get_json(
-            token,
-            &path,
-            &[("limit", limit.to_string()), ("offset", offset.to_string())],
-        )
-        .await
+    let mut pairs = vec![
+        ("occurrence_limit", SOURCE_TILE_PAGE_SIZE.to_string()),
+        ("placement_limit", SOURCE_TILE_PAGE_SIZE.to_string()),
+    ];
+    if let Some(cursor) = occurrence_cursor {
+        pairs.push(("occurrence_cursor", cursor.to_string()));
+    }
+    if let Some(cursor) = placement_cursor {
+        pairs.push(("placement_cursor", cursor.to_string()));
+    }
+    client.get_json(token, &path, &pairs).await
 }
 
 // ---------------------------------------------------------------------------
@@ -575,44 +682,54 @@ pub async fn list_source_tile_placements(
     token: &BearerToken,
     id: Uuid,
     limit: Option<u32>,
-    offset: Option<u32>,
-) -> ApiResult<Vec<PlacementTileRead>> {
+    cursor: Option<&str>,
+) -> ApiResult<ListResponse<PlacementTileRead>> {
     let path = format!("/v1/source-tiles/{id}/placements");
     let mut pairs: Vec<(&'static str, String)> = Vec::new();
     if let Some(l) = limit {
         pairs.push(("limit", l.to_string()));
     }
-    if let Some(o) = offset {
-        pairs.push(("offset", o.to_string()));
+    if let Some(cursor) = cursor {
+        pairs.push(("cursor", cursor.to_string()));
     }
     client.get_json(token, &path, &pairs).await
 }
 
-/// Fetch **every** placement of a source tile by walking the documented
-/// `limit` / `offset` pagination.
+/// Fetch every placement page until Core returns no `next_cursor`.
 pub async fn list_all_source_tile_placements(
     client: &ApiClient,
     token: &BearerToken,
     id: Uuid,
 ) -> ApiResult<Vec<PlacementTileRead>> {
     let mut out: Vec<PlacementTileRead> = Vec::new();
-    let mut offset: u32 = 0;
+    let mut cursor: Option<String> = None;
+    let mut seen = HashSet::new();
     loop {
         let page = list_source_tile_placements(
             client,
             token,
             id,
             Some(SOURCE_TILE_PAGE_SIZE),
-            Some(offset),
+            cursor.as_deref(),
         )
         .await?;
-        let page_len = page.len();
-        out.extend(page);
-        if page_len < SOURCE_TILE_PAGE_SIZE as usize {
-            return Ok(out);
+        if page.legacy_array && page.items.len() >= SOURCE_TILE_PAGE_SIZE as usize {
+            return Err(crate::error::ApiError::Pagination(
+                "legacy placement response filled the page; cursor pagination is required to prove completeness".into(),
+            ));
         }
-        offset = next_page_offset(offset, page_len)?;
+        out.extend(page.items);
+        let Some(next_cursor) = page.next_cursor else {
+            break;
+        };
+        if !seen.insert(next_cursor.clone()) {
+            return Err(crate::error::ApiError::Pagination(
+                "source-tile placements returned a repeated cursor".into(),
+            ));
+        }
+        cursor = Some(next_cursor);
     }
+    Ok(out)
 }
 
 /// Spec: `components.schemas.ReflowSourceTilePayloadSchema`.
@@ -667,9 +784,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pagination_offset_stops_at_the_contract_int32_limit() {
-        assert_eq!(next_page_offset(500, 500).unwrap(), 1_000);
-        assert!(next_page_offset(i32::MAX as u32, 500).is_err());
+    fn legacy_list_array_decodes_as_a_terminal_page() {
+        let page: ListResponse<i32> = serde_json::from_str("[1,2,3]").unwrap();
+        assert_eq!(page.items, [1, 2, 3]);
+        assert_eq!(page.count, 3);
+        assert_eq!(page.next_cursor, None);
+    }
+
+    #[test]
+    fn cursor_list_decodes_opaque_next_cursor_and_page_count() {
+        let page: ListResponse<i32> =
+            serde_json::from_str(r#"{"items":[4,5],"count":2,"next_cursor":"opaque/keyset"}"#)
+                .unwrap();
+        assert_eq!(page.items, [4, 5]);
+        assert_eq!(page.count, 2);
+        assert_eq!(page.next_cursor.as_deref(), Some("opaque/keyset"));
     }
 
     #[test]

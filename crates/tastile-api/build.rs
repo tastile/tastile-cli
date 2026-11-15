@@ -18,6 +18,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::json;
 
+#[path = "src/drift.rs"]
+mod drift;
+
 #[derive(Debug, Deserialize)]
 struct OpenApiDoc {
     openapi: String,
@@ -47,6 +50,12 @@ enum ResponseSpec {
     Ref(&'static str),
     /// `items: $ref ...` — array of the named schema.
     ArrayOf(&'static str),
+    /// During the unpublished cursor-contract transition, accept the pinned
+    /// legacy array or the new named ListResponse schema.
+    CursorListOrArrayOf {
+        legacy_item: &'static str,
+        cursor_schema: &'static str,
+    },
     /// `schema: {}` — empty schema, content is opaque to the client.
     Empty,
 }
@@ -138,7 +147,10 @@ const CONTRACTS: &[OperationContract] = &[
         method: "get",
         path: "/v1/source-tiles",
         request_body_schema: None,
-        response_200: ResponseSpec::ArrayOf("SourceTileRead"),
+        response_200: ResponseSpec::CursorListOrArrayOf {
+            legacy_item: "SourceTileRead",
+            cursor_schema: "SourceTileListResponse",
+        },
         path_params: &[],
         required_envelope_fields: &[],
         payload_required_fields: &[],
@@ -198,7 +210,10 @@ const CONTRACTS: &[OperationContract] = &[
         method: "get",
         path: "/v1/source-tiles/{id}/placements",
         request_body_schema: None,
-        response_200: ResponseSpec::ArrayOf("PlacementTileRead"),
+        response_200: ResponseSpec::CursorListOrArrayOf {
+            legacy_item: "PlacementTileRead",
+            cursor_schema: "PlacementTileListResponse",
+        },
         path_params: &["id"],
         required_envelope_fields: &[],
         payload_required_fields: &[],
@@ -522,6 +537,18 @@ fn check_contract(
                     return;
                 }
             }
+            let unmodelled = drift::unmodelled_required_fields(
+                &body_required,
+                contract.required_envelope_fields,
+                drift::known_optional_envelope_fields(expected),
+            );
+            if !unmodelled.is_empty() {
+                emit_error(&format!(
+                    "tastile-api: contract drift: request body for `{} {}` (schema `{}`) adds required field(s) not modelled by the typed client: {:?}",
+                    contract.method, contract.path, expected, unmodelled
+                ));
+                return;
+            }
             if !contract.payload_required_fields.is_empty() {
                 let payload_required = payload_required_fields(expected, schemas);
                 for required in contract.payload_required_fields {
@@ -532,6 +559,18 @@ fn check_contract(
                         ));
                         return;
                     }
+                }
+                let unmodelled = drift::unmodelled_required_fields(
+                    &payload_required,
+                    contract.payload_required_fields,
+                    &[],
+                );
+                if !unmodelled.is_empty() {
+                    emit_error(&format!(
+                        "tastile-api: contract drift: payload for `{} {}` adds required field(s) not modelled by the typed client: {:?}",
+                        contract.method, contract.path, unmodelled
+                    ));
+                    return;
                 }
             }
         }
@@ -616,6 +655,19 @@ fn check_response(contract: &OperationContract, method_item: &serde_yaml::Mappin
                         contract.method, contract.path, expected
                     ));
                 }
+            }
+        }
+        ResponseSpec::CursorListOrArrayOf {
+            legacy_item,
+            cursor_schema,
+        } => {
+            let actual = ref_name(resp200.and_then(|r| r.get("content")));
+            if actual.as_deref() != Some(cursor_schema) {
+                let legacy_contract = OperationContract {
+                    response_200: ResponseSpec::ArrayOf(legacy_item),
+                    ..*contract
+                };
+                check_response(&legacy_contract, method_item);
             }
         }
         ResponseSpec::ArrayOf(expected) => {

@@ -9,8 +9,10 @@ observations**, not independently verified in this repository.
 ## Contract gaps found while verifying the CLI (2026-11-15)
 
 The pinned `openapi/openapi.yaml` (Tastile OpenAPI 1.0.1) turned out to
-disagree with the CLI in five places. Each one is fixed in this branch,
-and each fix follows the pinned contract rather than a local guess:
+disagree with the CLI in several places. The original five discrepancies
+below were fixed against the pinned contract. Review follow-up work adds
+compatibility for the upcoming cursor and required-revision contract without
+changing the OpenAPI submodule pin:
 
 | Finding | Contract | CLI before | Now |
 | --- | --- | --- | --- |
@@ -18,7 +20,37 @@ and each fix follows the pinned contract rather than a local guess:
 | Placement window | `SourceWindowSchema` requires `start_offset_ms` / `end_offset_ms` with `start < end` | `{"window": "anytime"}` | `{"start_offset_ms": 0, "end_offset_ms": 14400000}` |
 | One-time generation | `SourceGenerationSchema.kind = 0` requires the `at` instant | `{"kind": 0}` | `{"kind": 0, "at": "<horizon start>"}` |
 | Tile list parameters | `GET /v1/tiles` documents `owner_ids`, `limit`, `view_mode`, `lifecycle`, `range`, `granularity`, `search`, `exclude_future` | `window_start`, `window_end`, `plan_id`, `include_closed` (all ignored by the server) | only the documented parameters |
-| Listing page size | `limit` (1..500) and `offset` exist; the server defaults to 100 rows | one request, no pagination | `limit`/`offset` walked until a short page |
+| Listing page size | The pinned contract uses `limit` (1..500) and `offset` | one request, no pagination | the updated client sends cursor requests per Core #305; legacy arrays decode during transition |
+
+## Incoming Core contract compatibility (pin pending)
+
+Core PRs [#302](https://github.com/tastile/tastile-core/pull/302) and
+[#305](https://github.com/tastile/tastile-core/pull/305) are still unpublished
+contract changes. This branch follows their intended wire behavior while
+keeping the `openapi/` gitlink pinned until Core merges the PRs and publishes
+the updated spec:
+
+- Update, cancel and reflow send `expected_revision` by default. Update uses
+  the revision from the source read displayed for its diff; cancel and reflow
+  read the current revision before the write. `--expect-revision` overrides
+  the value. Reflow therefore satisfies Core #302's required field.
+- Source-tile list and placement-list requests use `cursor`. Source detail
+  requests use independent `occurrence_cursor` / `placement_cursor` and
+  `occurrence_limit` / `placement_limit`. Responses decode the new
+  `{items,count,next_cursor}` page or the pinned legacy array. No `offset`
+  parameter is sent.
+- A legacy array shorter than 500 items is treated as terminal. A full legacy
+  500-item page fails with an explicit pagination error because that response
+  cannot establish whether more results exist. The cursor contract is needed
+  to prove completeness above that page size.
+- The build drift gate accepts the pinned old array response and the named
+  cursor response schemas. It also fails on newly required request fields,
+  except for explicitly modeled optional fields that this CLI already sends.
+
+Do not bump the submodule to an unpublished Core spec. Track the pin update on
+[tastile-cli#6](https://github.com/tastile/tastile-cli/issues/6) and complete
+it after both Core contract changes merge and the generated/published OpenAPI
+revision is available.
 
 Gaps that the pinned contract does **not** cover, and that the CLI
 therefore refuses or works around instead of inventing wire fields:
@@ -33,10 +65,11 @@ therefore refuses or works around instead of inventing wire fields:
   subject against a Core owner id or prove stack isolation. The contract has
   no `whoami` operation, so that identity check remains a gap.
 - **Some list projections cannot be paged.** `GET /v1/tiles` and the pending
-  prompt list define no offset or cursor in the pinned spec. Those commands
-  make one request and cannot promise complete results if Core caps them.
-  Source-tile list/detail/placements do support documented `limit` / `offset`
-  and are paged through.
+  prompt list define no offset or cursor in the pinned spec. The tile command
+  warns when its current server cap of 500 rows is reached. Prompt listing
+  currently returns all unresolved rows in Core but the contract has no
+  pagination semantics if that ever changes. Source-tile list/detail/
+  placements use the upcoming Core cursor parameters, with the pin pending.
 - **No diff or patch endpoint.** `PUT /v1/source-tiles/{id}` is a full
   replacement. The CLI's `--dry-run` compares fields exposed by the read
   model and explicitly warns that the model omits plan details, flows,
@@ -106,6 +139,37 @@ The stack is created by `scripts/e2e-local-stack.sh`; the CLI run is
 | `schedule publish --apply` | required an explicit idempotency key, applied to the isolated loopback Core, and was read back through the source-tile API |
 | `auth logout` | server-side revocation passed the write gate and the file-backed local credential was removed |
 
+### PR #7 review-fix E2E rerun (2026-11-15)
+
+This bounded rerun exercised the revision-default and cursor-transition code
+against Core 1.1.0 with a host-built API and a newly created, task-owned
+PostgreSQL container. It did not use the shared `tastile_verify` database or
+connect to port 31400.
+
+| Item | Value |
+| --- | --- |
+| Core source | `origin/release-1-1-0` at `e8bdfef3567f1bb5560acf5ac9f58b91280696d8`; API binary built from that source on the host |
+| API | `127.0.0.1:31637`, `TASTILE_ENV=development`; `/v1/health` reported version `1.1.0` and a reachable database (overall `degraded` because this isolated stack has no bridge secret) |
+| Database | own container `tcli6-pr7-review-db`, Postgres `16-alpine` image `sha256:f377d590e5474681d4d7838635031a2b50647923b7abfa803ce9b5ff35d5c663`, bound only to `127.0.0.1:55461`; database `tcli6_pr7_e2e`, dedicated user and credential |
+| Delivery / worker | `TASTILE_DELIVERY_PROVIDER=fake`; worker not started for this API command-flow rerun |
+| CLI auth | dedicated owner and bearer row seeded only in `tcli6_pr7_e2e`; mode-0600 file credential; isolation attestation set; token not printed |
+
+| Check | Result |
+| --- | --- |
+| Authenticated `source-tiles list` | passed against the dedicated Core API |
+| `source-tiles create --daily 09:00 --utc-offset 540` | created and read back; detail returned 14 occurrences and 14 placements, with `kind=1`, daily interval, and `offset_min=540` |
+| Update preview and conflict | `--dry-run` passed; a stale explicit revision was rejected with `409` |
+| `source-tiles update` without `--expect-revision` | passed using the revision from the diff read; new title and revision were read back |
+| `source-tiles reflow` without `--expect-revision` | preview and apply passed; state was read back |
+| `source-tiles cancel` without `--expect-revision` | preview and apply passed; readback showed `source_state = 3` |
+| `schedule publish --apply` | offline preview passed; apply with an idempotency key succeeded, and the published source was read back through the API |
+| Cursor response compatibility | Core 1.1.0 returned the legacy array shape in this run; mock pagination tests cover `{items,count,next_cursor}`, continuation cursors, independent detail cursors, and fail-closed legacy full pages |
+
+This rerun did not exercise worker delivery/execution flows. The upcoming
+Core #302/#305 request and cursor response shapes remain covered by CLI code
+and mock tests, but are not live-verified until those Core changes are merged
+and the published OpenAPI pin is updated.
+
 ### Authentication mismatch (test systems only)
 
 The production CLI obtains its bearer token through the browser-mediated
@@ -126,10 +190,11 @@ Do not use this port for test API, migration, restart, CLI mutation, or
 comparison. Localhost is **not synonymous with test**. The operational
 PostgreSQL and background hooks remain the only production source of truth.
 
-Every write path passes the shared gate: loopback needs
-`TASTILE_ISOLATED_TEST_STACK=confirmed`, port 31400 is always refused, remote
-plaintext is refused, credentials must match the configured API base and be
-unexpired, and the target must accept a documented read probe. Ordinary
+`ApiConfig` rejects port 31400 for every API request, including reads, before
+connecting. Every write path also passes the shared gate: loopback needs
+`TASTILE_ISOLATED_TEST_STACK=confirmed`, remote plaintext is refused,
+credentials must match the configured API base and be unexpired, and the
+target must accept a documented read probe. Ordinary
 mutations may use an explicitly configured HTTPS API; `schedule publish
 --apply` is additionally loopback-only and requires a stable idempotency key.
 These are safeguards against accidental writes, not proof of isolation. An
