@@ -124,6 +124,16 @@ const CONTRACTS: &[OperationContract] = &[
         payload_required_fields: &["prompt_id", "resolution"],
     },
     OperationContract {
+        operation_id: "publish_schedule_definition",
+        method: "post",
+        path: "/v1/schedule-definitions",
+        request_body_schema: Some("PublishScheduleDefinitionRequest"),
+        response_200: ResponseSpec::Ref("CommandResponse"),
+        path_params: &[],
+        required_envelope_fields: &["idempotency_key", "payload"],
+        payload_required_fields: &["tile", "plan", "reference_targets", "windows", "flows"],
+    },
+    OperationContract {
         operation_id: "list_source_tiles",
         method: "get",
         path: "/v1/source-tiles",
