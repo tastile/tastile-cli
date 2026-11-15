@@ -99,15 +99,13 @@ The binary. Single `tokio` runtime, subcommand-dispatched.
   no args → TUI, subcommand → CLI. The TUI calls the same
   `app::*` functions as the CLI.
 
-## Wire contract: 18 of 21 operations across 5 areas
+## Wire contract: 19 of 21 operations across 6 areas
 
 The pinned `openapi/openapi.yaml` declares 21 `operationId`s in total. The
-CLI surface intentionally covers **18** of them — the operations a
-command-line or TUI client can drive today. The remaining 3
-(`delete_owner`, `export_owner`, `publish_schedule_definition`) are
-admin / data-portability endpoints that are out of scope for the
-initial CLI; they will land in a later release once a real consumer
-asks for them.
+CLI surface covers **19** of them, including `publish_schedule_definition`
+for offline preview and an explicit loopback-only Core write. The remaining
+2 (`delete_owner`, `export_owner`) are administrative endpoints and are not
+included in the typed CLI surface.
 
 | Area | Module | Operations |
 | --- | --- | --- |
@@ -116,14 +114,14 @@ asks for them.
 | source-tiles | `source_tiles.rs` | `list_source_tiles`, `get_source_tile`, `create_source_tile`, `update_source_tile`, `cancel_source_tile`, `get_source_tile_completion`, `list_source_tile_placements`, `reflow_source_tile` |
 | executions | `executions.rs` | `start_execution`, `pause_execution`, `resume_execution`, `finish_execution` |
 | auth | `auth.rs` | `signout` |
+| schedule | `schedule.rs` | `publish_schedule_definition` |
 
-Total CLI surface: 18 of 21. The drift gate in `build.rs` enforces every
-one of the 18 — a row in `OperationContract` per operation, with
-path, method, operationId, path params, request schema, required
-payload fields, and 200 response shape all checked at build time. The
-3 admin operations are **not** in the contract, so they are **not**
-covered by the drift gate; if they are needed later, add a row and the
-gate will pick them up.
+Total CLI surface: 19 of 21. The drift gate in `build.rs` checks all
+19 entries for method, path, operationId, request schema, required payload
+fields and response. The 2 remaining administrative operations are not yet
+covered. The new `schedule publish` command deliberately separates offline
+payload preview from explicit `--apply` and allows mutation of loopback Core
+only; this is not evidence of Muse migration readiness.
 
 ## Authentication: browser-mediated authorization-code grant
 
