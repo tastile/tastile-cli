@@ -118,11 +118,24 @@ pub struct ScheduleArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum ScheduleCommand {
-    /// Re-publish the schedule definition for the current period.
+    /// Legacy placeholder; never silently reports success.
     Regenerate {
-        /// Publish against the staging API instead of production.
+        /// Retained for compatibility; no API request will be issued.
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Validate a full schedule payload offline; send only with --apply.
+    Publish {
+        /// A JSON object with the required PublishScheduleDefinitionPayload fields.
+        /// Use '-' to read standard input.
+        #[arg(long, value_name = "PATH")]
+        from_json: String,
+        /// Actually send the schedule to the configured local Core API.
+        #[arg(long)]
+        apply: bool,
+        /// Stable idempotency key to safely retry after an uncertain response.
+        #[arg(long, value_name = "UUID")]
+        idempotency_key: Option<uuid::Uuid>,
     },
 }
 
