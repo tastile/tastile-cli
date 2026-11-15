@@ -22,12 +22,13 @@ that invariant, the change is wrong.
 | Typed Rust client surface | `crates/tastile-api/src/*.rs` |
 | Drift gate | `crates/tastile-api/build.rs` + `scripts/check-openapi-drift.sh` |
 
-The pinned spec declares 21 `operationId`s. The CLI surface covers 18
-of them — every operation a command-line or TUI client can drive
-today. The remaining 3 (`delete_owner`, `export_owner`,
-`publish_schedule_definition`) are admin / data-portability endpoints
-that are intentionally out of scope for the initial CLI and **not**
-covered by the drift gate.
+The pinned spec declares 21 `operationId`s. The CLI surface covers 19
+of them, including the isolated local Core `publish_schedule_definition`
+operation. The 2 remaining operations (`delete_owner`, `export_owner`) are
+administrative endpoints not covered by the drift gate. `schedule publish`
+previews without any network access, and `--apply` must reject remote targets.
+Only the server can validate scheduling semantics; a successful preview does
+not establish that occurrences were correctly materialized.
 
 When you bump the pinned OpenAPI revision, run:
 
