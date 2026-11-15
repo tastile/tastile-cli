@@ -207,7 +207,7 @@ pub struct ListResponse<T> {
     pub count: usize,
     pub next_cursor: Option<String>,
     #[serde(skip)]
-    legacy_array: bool,
+    pub(crate) legacy_array: bool,
 }
 
 impl<'de, T> Deserialize<'de> for ListResponse<T>

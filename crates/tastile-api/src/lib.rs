@@ -76,7 +76,7 @@ pub use source_tiles::{
     list_all_source_tiles, list_source_tile_placements, list_source_tiles, reflow_source_tile,
     update_source_tile,
 };
-pub use tiles::list_tiles;
+pub use tiles::{TILE_LIST_PAGE_SIZE, list_all_tiles, list_tiles};
 
 /// Compile-time API version metadata pulled from the pinned
 /// `openapi/openapi.yaml` by `tastile-api`'s `build.rs`.

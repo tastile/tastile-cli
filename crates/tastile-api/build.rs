@@ -87,7 +87,7 @@ const CONTRACTS: &[OperationContract] = &[
         method: "get",
         path: "/v1/tiles",
         request_body_schema: None,
-        response_200: ResponseSpec::ArrayOf("TileListView"),
+        response_200: ResponseSpec::Ref("TileListResponse"),
         path_params: &[],
         required_envelope_fields: &[],
         payload_required_fields: &[],

@@ -1,8 +1,9 @@
-//! Source-tile lists and detail collections must walk the Core cursor
-//! contract so large owners are never silently truncated.
+//! Tile and source-tile lists, plus source-tile detail collections, must
+//! walk the Core cursor contract so large owners are never silently
+//! truncated.
 
 use mockito::{Matcher, Server};
-use tastile_api::{ApiClient, ApiConfig, BearerToken, source_tiles};
+use tastile_api::{ApiClient, ApiConfig, BearerToken, source_tiles, tiles};
 
 fn source_tile_json(index: usize) -> String {
     format!(
@@ -92,6 +93,27 @@ fn detail_page(
     .to_string()
 }
 
+fn tile_list_view_json(index: usize) -> String {
+    format!(
+        r#"{{
+            "id": "00000000-0000-0000-0000-{index:012}",
+            "title": "tile-{index}",
+            "lifecycle": 0,
+            "worked_minutes": 0,
+            "break_minutes": 0,
+            "labels": [],
+            "objective_mode": 0
+        }}"#
+    )
+}
+
+fn tile_page(start: usize, count: usize, next_cursor: Option<&str>) -> String {
+    let rows: Vec<serde_json::Value> = (start..start + count)
+        .map(|index| serde_json::from_str(&tile_list_view_json(index)).unwrap())
+        .collect();
+    response_page(rows, next_cursor).to_string()
+}
+
 fn page(start: usize, count: usize, next_cursor: Option<&str>) -> String {
     let rows: Vec<serde_json::Value> = (start..start + count)
         .map(|index| serde_json::from_str(&source_tile_json(index)).unwrap())
@@ -151,6 +173,92 @@ async fn list_all_source_tiles_stops_on_a_short_page() {
 
     assert_eq!(all.len(), 2);
     only.assert_async().await;
+}
+
+#[tokio::test]
+async fn list_tiles_returns_a_single_envelope_page() {
+    let mut server = Server::new_async().await;
+    let only = server
+        .mock("GET", "/v1/tiles")
+        .match_query(Matcher::Regex("limit=7$".into()))
+        .with_body(tile_page(0, 2, Some("tiles-next")))
+        .create_async()
+        .await;
+
+    let client = ApiClient::new(ApiConfig::new(&server.url()).expect("valid url")).expect("client");
+    let token = BearerToken::new("test-token");
+    let query = tiles::ListTilesQuery {
+        limit: Some(7),
+        ..Default::default()
+    };
+
+    let page = tiles::list_tiles(&client, &token, &query)
+        .await
+        .expect("lists one page");
+
+    assert_eq!(page.items.len(), 2);
+    assert_eq!(page.count, 2);
+    assert_eq!(page.next_cursor.as_deref(), Some("tiles-next"));
+    only.assert_async().await;
+}
+
+#[tokio::test]
+async fn list_all_tiles_follows_next_cursor() {
+    let mut server = Server::new_async().await;
+    let first = server
+        .mock("GET", "/v1/tiles")
+        .match_query(Matcher::Regex("limit=1000$".into()))
+        .with_body(tile_page(0, 2, Some("tiles-next")))
+        .create_async()
+        .await;
+    let second = server
+        .mock("GET", "/v1/tiles")
+        .match_query(Matcher::Regex("limit=1000&cursor=tiles-next".into()))
+        .with_body(tile_page(2, 3, None))
+        .create_async()
+        .await;
+
+    let client = ApiClient::new(ApiConfig::new(&server.url()).expect("valid url")).expect("client");
+    let token = BearerToken::new("test-token");
+    let query = tiles::ListTilesQuery::default();
+
+    let all = tiles::list_all_tiles(&client, &token, &query)
+        .await
+        .expect("lists");
+
+    assert_eq!(
+        all.len(),
+        5,
+        "every row across both cursor pages must be returned"
+    );
+    first.assert_async().await;
+    second.assert_async().await;
+}
+
+#[tokio::test]
+async fn list_all_tiles_rejects_a_repeated_cursor() {
+    let mut server = Server::new_async().await;
+    server
+        .mock("GET", "/v1/tiles")
+        .match_query(Matcher::Regex("limit=1000$".into()))
+        .with_body(tile_page(0, 1, Some("tiles-loop")))
+        .create_async()
+        .await;
+    server
+        .mock("GET", "/v1/tiles")
+        .match_query(Matcher::Regex("limit=1000&cursor=tiles-loop".into()))
+        .with_body(tile_page(1, 1, Some("tiles-loop")))
+        .create_async()
+        .await;
+
+    let client = ApiClient::new(ApiConfig::new(&server.url()).expect("valid url")).expect("client");
+    let token = BearerToken::new("test-token");
+
+    let error = tiles::list_all_tiles(&client, &token, &Default::default())
+        .await
+        .expect_err("a repeated cursor must not loop forever");
+
+    assert!(error.to_string().contains("repeated cursor"));
 }
 
 #[tokio::test]

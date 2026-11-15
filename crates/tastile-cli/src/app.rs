@@ -160,34 +160,17 @@ impl std::ops::Deref for AppContext {
 
 /// List tiles with an explicit query built from the documented
 /// `GET /v1/tiles` parameters.
+///
+/// The endpoint pages via `next_cursor` (v1/14 §15), so every matching row
+/// is fetched rather than truncated at the server page size.
 pub async fn list_tiles(
     ctx: &AppContext,
     query: api_tiles::ListTilesQuery,
 ) -> Result<Vec<TileListView>> {
     let token = ctx.require_token()?;
-    let tiles = api_tiles::list_tiles(ctx, token, &query)
+    api_tiles::list_all_tiles(ctx, token, &query)
         .await
-        .context("list_tiles failed")?;
-    report_tiles_result_cap(tiles.len(), query.limit);
-    Ok(tiles)
-}
-
-const TILE_LIST_SERVER_CAP: usize = 500;
-static TILE_LIST_CAP_WARNING: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-
-fn tiles_result_reached_server_cap(rows: usize, requested_limit: Option<i64>) -> bool {
-    requested_limit.unwrap_or(TILE_LIST_SERVER_CAP as i64) >= TILE_LIST_SERVER_CAP as i64
-        && rows == TILE_LIST_SERVER_CAP
-}
-
-fn report_tiles_result_cap(rows: usize, requested_limit: Option<i64>) {
-    if tiles_result_reached_server_cap(rows, requested_limit)
-        && TILE_LIST_CAP_WARNING.set(()).is_ok()
-    {
-        tracing::warn!(
-            "GET /v1/tiles returned the server cap of {TILE_LIST_SERVER_CAP} rows; this endpoint has no cursor, so more results may exist"
-        );
-    }
+        .context("list_tiles failed")
 }
 
 /// Sorted view of the current tiles.
@@ -201,10 +184,9 @@ pub async fn today(ctx: &AppContext) -> Result<Vec<TileListView>> {
         exclude_future: Some(true),
         ..Default::default()
     };
-    let mut tiles = api_tiles::list_tiles(ctx, token, &query)
+    let mut tiles = api_tiles::list_all_tiles(ctx, token, &query)
         .await
         .context("list_tiles failed")?;
-    report_tiles_result_cap(tiles.len(), query.limit);
     // The CLI surfaces a "next actionable" view by sorting on
     // projected_next_start_at ascending, treating None as far future.
     tiles.sort_by(|a, b| {
@@ -1213,14 +1195,6 @@ mod tests {
 
         draft.plan_role = 1;
         assert!(validate_plan_role(&draft).is_ok());
-    }
-
-    #[test]
-    fn only_default_or_maximum_tile_lists_warn_when_the_cap_is_reached() {
-        assert!(tiles_result_reached_server_cap(500, None));
-        assert!(tiles_result_reached_server_cap(500, Some(900)));
-        assert!(!tiles_result_reached_server_cap(499, None));
-        assert!(!tiles_result_reached_server_cap(10, Some(10)));
     }
 
     #[test]
