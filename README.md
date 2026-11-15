@@ -73,7 +73,7 @@ cargo build --release
 | `tastile prompts startup-recovery …` | Trigger a startup-recovery prompt. |
 | `tastile prompts resolve <id> --resolution ack|dismiss|act` | Resolve a prompt. |
 | `tastile schedule publish --from-json PATH` | Validate and preview the canonical schedule payload locally (no API call). |
-| `tastile schedule publish --from-json PATH --apply` | Publish to an authenticated **loopback** Core API; rejects remote targets. |
+| `tastile schedule publish --from-json PATH --apply` | Publish only to an explicitly confirmed **isolated** loopback Core, never the Muse operational port 31400. |
 | `tastile schedule regenerate` | Deprecated placeholder: exits with an error instead of falsely reporting success. |
 | `tastile completions <shell>` | Generate a shell completion script. |
 | `tastile version` | Print version + pinned OpenAPI metadata. |
@@ -97,17 +97,20 @@ considering any success.
 # Validate the required payload envelope completely offline.
 tastile schedule publish --from-json ./local-schedule.json
 
-# Configure the local Core API, obtain a local test-account token through
-# the matching local Web auth flow, then explicitly write to isolated Core.
-TASTILE_API_URL=http://127.0.0.1:31400 \
+# Configure an isolated test API + separate database, token and notification sink.
+# Port 31400 is reserved by the operational Muse stack and cannot be used.
+TASTILE_API_URL=http://127.0.0.1:31402 \
+  TASTILE_ISOLATED_TEST_STACK=confirmed \
   tastile schedule publish --from-json ./local-schedule.json --apply \
   --idempotency-key <stable-uuid>
 ```
 
 The `--idempotency-key` is optional for a first request but **must be reused**
 for an uncertain retry. An omitted `--apply` never opens the credential store
-or network. Non-loopback `--apply` fails; an invalid payload also fails rather
-than being silently converted to a daily schedule. The old `regenerate`
+or network. Non-loopback `--apply`, operational port 31400, and missing isolated-stack
+confirmation all fail closed. The confirmation flag is an operator safeguard,
+not a substitute for verifying the actual database, owner and notification
+configuration. An invalid payload fails instead of silently becoming daily. The old `regenerate`
 subcommand now returns an error rather than claiming to have regenerated.
 
 See [CLI acceptance and Muse shadow matrix](./docs/local-first-acceptance.md)
