@@ -115,6 +115,8 @@ impl ListTilesQuery {
 
 /// A page size accepted by the pinned contract (`1..=1000`).
 pub const TILE_LIST_PAGE_SIZE: i64 = 1000;
+/// Maximum array size returned by pre-cursor Core versions for `/v1/tiles`.
+const LEGACY_TILE_LIST_CAP: usize = 500;
 
 /// `GET /v1/tiles` → `operationId: list_tiles`.
 ///
@@ -147,7 +149,7 @@ pub async fn list_all_tiles(
             ..q.clone()
         };
         let page = list_tiles(client, token, &page_query).await?;
-        if page.legacy_array && page.items.len() >= TILE_LIST_PAGE_SIZE as usize {
+        if page.legacy_array && page.items.len() >= LEGACY_TILE_LIST_CAP {
             return Err(crate::error::ApiError::Pagination(
                 "legacy tile-list response filled the page; cursor pagination is required to prove completeness".into(),
             ));

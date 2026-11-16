@@ -55,23 +55,18 @@ tastile tiles --lifecycle ready
 tastile tiles --search "rust" --json
 ```
 
-`GET /v1/tiles` supports `owner_ids`, `limit`, `view_mode`, `lifecycle`,
-`range`, `granularity`, `search` and `exclude_future`, but has no offset or
-cursor. `tastile tiles` and `tastile today` therefore make one request and
-cannot guarantee a complete result if Core caps it; the CLI warns when the
-500-row cap is reached. `prompts list` likewise has no pagination parameters
-in the pinned contract. Source-tile list and placements follow `cursor` pages;
-source-tile detail independently follows `occurrence_cursor` and
-`placement_cursor`, with `occurrence_limit` and `placement_limit`.
+`GET /v1/tiles` supports `owner_ids`, `limit`, `cursor`, `view_mode`,
+`lifecycle`, `range`, `granularity`, `search` and `exclude_future`.
+`tastile tiles`, `tastile today`, source-tile list, source-tile placements,
+and source-tile detail collections follow cursor pages. A full legacy array
+fails closed because its completeness cannot be established. For `/v1/tiles`,
+the CLI requests the contract maximum of 1,000 but rejects a cursorless
+500-item legacy response, matching the old Core cap. `prompts list` has no
+pagination parameters in the pinned contract. The client sends no `offset`.
 
-The cursor request/response shape is implemented ahead of the pinned OpenAPI
-revision to match Core PRs [#302](https://github.com/tastile/tastile-core/pull/302)
-and [#305](https://github.com/tastile/tastile-core/pull/305). The submodule
-pin remains unchanged until those contracts are merged and published. The
-client accepts legacy array responses while the transition is in progress;
-if an old server returns a full 500-row array without a cursor, it reports
-that completeness cannot be proven instead of silently returning a truncated
-list. No `offset` parameter is sent.
+`tastile today` requests future projections and filters out rows whose
+`projected_next_start_at` is in the past or absent, so a stale projection
+cannot become the next actionable tile.
 
 ## Writing
 

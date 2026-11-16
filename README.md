@@ -54,7 +54,7 @@ cargo build --release
 | `tastile auth status` | Show whether a bearer token is stored. |
 | `tastile auth logout` | Remove the local token; attempt guarded server-side revocation. |
 | `tastile doctor` | Diagnostics: toolchain, credential store, API reachability. |
-| `tastile today` | Show the next actionable tile for today. |
+| `tastile today` | Show the next tile with a projected start that has not passed. |
 | `tastile tiles` | List tiles in the current day window. |
 | `tastile source-tiles list` | List every source tile (paginated; no silent 100-row cap). |
 | `tastile source-tiles get <id>` | Show one source tile + every occurrence and placement (paginated). |
@@ -143,13 +143,13 @@ the owner or prove the stack is isolated; only the operator can attest isolation
 
 See [docs/cli-operations.md](./docs/cli-operations.md) for the full
 operation guide, expected error messages and a safe stop/resume procedure.
-The pinned `GET /v1/tiles` and pending-prompt list endpoints have no offset
-or cursor, so those views make one request and cannot guarantee completeness
-if Core applies a result cap. The CLI warns when `/v1/tiles` reaches its
-current 500-row cap. Source-tile list, detail and placements use the cursor
-contract from Core PRs #302/#305 ahead of the OpenAPI pin; the pin is pending
-Core merge and publication. Legacy array responses still decode, but a full
-500-row legacy page fails explicitly because it cannot prove completeness.
+The pinned `GET /v1/tiles`, source-tile list, detail and placement endpoints
+support cursor pagination; the CLI follows each cursor to completion. Pending
+prompt listing has no pagination contract. Legacy array responses are still
+decoded during migration, but full legacy pages fail explicitly because the
+client cannot prove they are complete. The `/v1/tiles` reader also rejects a
+500-row legacy response, matching the pre-cursor Core cap even though the
+pinned page size is 1,000.
 
 ## Architecture
 
