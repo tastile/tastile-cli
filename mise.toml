@@ -12,11 +12,14 @@
 # components, not standalone tools — mise installs them via rustup so
 # CI and local runs have the same `cargo fmt` / `cargo clippy` surface.
 rust = { version = "1.98.1", components = ["rustfmt", "clippy"] }
+# Bun runs the `skills` CLI that manages the project-local Agent Skills
+# vendored under `.claude/skills/` and `.devin/skills/`. It is tooling
+# only — not an application runtime or package manager for this repo.
+bun = "1.4.4"
 # jq for JSON manipulation in scripts (subprocess parsing of generated code).
-jq = "latest"
-yq = "latest"
+jq = "1.8.2"
 # yq for YAML ↔ JSON round-trip during OpenAPI drift checks.
-# Installed via `mise use --global` style invocation; see README.
+yq = "4.54.3"
 
 [env]
 # Disable automatic project discovery above this repo so accidental
@@ -77,3 +80,11 @@ run = "cargo run -p tastile-cli -- doctor"
 [tasks."auth:status"]
 description = "Run the `tastile auth status` CLI subcommand."
 run = "cargo run -p tastile-cli -- auth status"
+
+[tasks.skills-bootstrap]
+description = "Restore project-local Agent Skills from skills-lock.json (fresh-clone fallback; the vendored copies are already committed)."
+run = "bunx skills@1.7.0 experimental_install"
+
+[tasks.skills-update]
+description = "Update project-local Agent Skills, refresh skills-lock.json, then review the diff before committing."
+run = "bunx skills@1.7.0 update -p -y"
