@@ -173,22 +173,27 @@ pub async fn list_tiles(
         .context("list_tiles failed")
 }
 
-/// Sorted view of the current tiles.
+/// Sorted view of tiles with a projected start that has not passed yet.
 ///
-/// The contract's `exclude_future` parameter drops tiles whose first
-/// upcoming placement is strictly in the future, which is the documented
-/// way to ask for "what is on today".
+/// Core's `exclude_future=true` keeps projected starts at or before now,
+/// including stale past starts. Request the full projection and filter
+/// locally so `today` can select the next scheduled tile instead.
 pub async fn today(ctx: &AppContext) -> Result<Vec<TileListView>> {
     let token = ctx.require_token()?;
     let query = api_tiles::ListTilesQuery {
-        exclude_future: Some(true),
+        exclude_future: Some(false),
         ..Default::default()
     };
     let mut tiles = api_tiles::list_all_tiles(ctx, token, &query)
         .await
         .context("list_tiles failed")?;
+    let now = Utc::now();
+    tiles.retain(|tile| {
+        tile.projected_next_start_at
+            .is_some_and(|next_start| next_start >= now)
+    });
     // The CLI surfaces a "next actionable" view by sorting on
-    // projected_next_start_at ascending, treating None as far future.
+    // projected_next_start_at ascending.
     tiles.sort_by(|a, b| {
         let ka = a
             .projected_next_start_at
@@ -1267,5 +1272,93 @@ mod tests {
                 .to_string()
                 .contains("different API base")
         );
+    }
+
+    #[tokio::test]
+    async fn today_returns_only_tiles_with_a_non_past_projected_start() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind API mock");
+        let address = listener.local_addr().expect("API mock address");
+        let api_url = format!("http://{address}");
+        let now = Utc::now();
+        let stale = tile_list_item("stale", Some(now - chrono::Duration::hours(1)));
+        let upcoming = tile_list_item("upcoming", Some(now + chrono::Duration::hours(1)));
+        let no_projection = tile_list_item("none", None);
+        let body = serde_json::to_vec(&[stale, upcoming, no_projection]).unwrap();
+        let request_line = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept API request");
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = tokio::io::BufReader::new(reader);
+            let mut line = String::new();
+            reader
+                .read_line(&mut line)
+                .await
+                .expect("read request line");
+            loop {
+                let mut header = String::new();
+                reader
+                    .read_line(&mut header)
+                    .await
+                    .expect("read request header");
+                if header == "\r\n" || header.is_empty() {
+                    break;
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            writer
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response headers");
+            writer.write_all(&body).await.expect("write response body");
+            line
+        });
+
+        let api = ApiClient::new(ApiConfig::new(&api_url).unwrap()).unwrap();
+        let mut config = Config::default();
+        config.api_url.clone_from(&api_url);
+        let ctx = AppContext {
+            api,
+            config,
+            token: Some(BearerToken::new("test-token")),
+            subject: None,
+            credential_api_base_url: Some(api_url),
+            credential_expires_at: None,
+        };
+
+        let tiles = today(&ctx).await.unwrap();
+        let request_line = request_line.await.unwrap();
+
+        assert_eq!(tiles.len(), 1);
+        assert_eq!(tiles[0].title, "upcoming");
+        assert!(request_line.contains("exclude_future=false"));
+    }
+
+    fn tile_list_item(title: &str, projected_next_start_at: Option<DateTime<Utc>>) -> TileListView {
+        TileListView {
+            id: Uuid::new_v4(),
+            title: title.to_string(),
+            lifecycle: 0,
+            worked_minutes: 0,
+            break_minutes: 0,
+            labels: Vec::new(),
+            objective_mode: 0,
+            plan_id: None,
+            projected_next_start_at,
+            done_definition: None,
+            done_rule: None,
+            next_action: None,
+            resume_note: None,
+            recurrence: None,
+            source: None,
+            target_rest_min: None,
+            target_work_min: None,
+            temporal: None,
+        }
     }
 }

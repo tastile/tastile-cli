@@ -58,6 +58,59 @@ fn short(s: &str, max: usize) -> String {
     }
 }
 
+fn unplaced_occurrence_row(
+    occurrence_id: Option<&serde_json::Value>,
+    blocked: &serde_json::Value,
+) -> Option<Vec<String>> {
+    let reason = blocked.get("reason")?.as_i64()?;
+    let reason = match reason {
+        0 => "INSUFFICIENT_CAPACITY".to_string(),
+        1 => "LIMIT_CONFLICT".to_string(),
+        2 => "PRIORITY_TIE_CONFLICT".to_string(),
+        other => format!("UNKNOWN({other})"),
+    };
+    let field = |name: &str| {
+        blocked
+            .get(name)
+            .and_then(|value| match value {
+                serde_json::Value::String(text) => Some(text.clone()),
+                serde_json::Value::Number(number) => Some(number.to_string()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "-".to_string())
+    };
+    let occurrence_id = occurrence_id
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("-")
+        .to_string();
+
+    Some(vec![
+        occurrence_id,
+        reason,
+        field("required_duration_ms"),
+        field("available_duration_ms"),
+        field("blocked_at"),
+        field("conflicting_source_tile_id"),
+    ])
+}
+
+fn print_unplaced_occurrences(rows: Vec<Vec<String>>) {
+    if !rows.is_empty() {
+        println!("Unplaced occurrences:");
+        print_table(
+            &[
+                "occurrence_id",
+                "reason",
+                "required_ms",
+                "available_ms",
+                "blocked_at",
+                "conflicting_source_id",
+            ],
+            rows,
+        );
+    }
+}
+
 pub fn print_tile(t: &TileListView) {
     println!("{}", t.title);
     println!("  id:          {}", t.id);
@@ -154,6 +207,18 @@ pub fn print_source_tile_detail(detail: &tastile_api::SourceTileDetailRead) {
     println!("  relations:  {} entries", detail.relations.len());
     println!("  occurrences: {} entries", detail.occurrences.len());
     println!("  placements:  {} entries", detail.placements.len());
+    let unplaced = detail
+        .occurrences
+        .iter()
+        .filter_map(|occurrence| {
+            let blocked = occurrence.0.get("blocked")?;
+            if blocked.is_null() {
+                return None;
+            }
+            unplaced_occurrence_row(occurrence.0.get("occurrence_id"), blocked)
+        })
+        .collect();
+    print_unplaced_occurrences(unplaced);
     let schedule = &s.schedule;
     println!(
         "  schedule:    kind={} duration={}ms priority={}",
@@ -243,6 +308,19 @@ pub fn print_command_response(r: &tastile_api::CommandResponse) {
     if !r.pending.is_empty() {
         println!("  pending:     {} items", r.pending.len());
     }
+    let unplaced = r
+        .aggregate_meta
+        .as_ref()
+        .and_then(|metadata| metadata.get("unplaced_occurrences"))
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| unplaced_occurrence_row(item.get("occurrence_id"), item))
+                .collect()
+        })
+        .unwrap_or_default();
+    print_unplaced_occurrences(unplaced);
 }
 
 /// Print the field-level diff between the stored source tile and a

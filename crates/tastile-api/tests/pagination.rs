@@ -262,6 +262,33 @@ async fn list_all_tiles_rejects_a_repeated_cursor() {
 }
 
 #[tokio::test]
+async fn full_legacy_tile_page_fails_instead_of_silently_truncating() {
+    let mut server = Server::new_async().await;
+    let only = server
+        .mock("GET", "/v1/tiles")
+        .match_query(Matcher::Regex("limit=1000$".into()))
+        .with_body(
+            serde_json::Value::Array(
+                (0..500)
+                    .map(|index| serde_json::from_str(&tile_list_view_json(index)).unwrap())
+                    .collect(),
+            )
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let client = ApiClient::new(ApiConfig::new(&server.url()).expect("valid url")).expect("client");
+    let token = BearerToken::new("test-token");
+    let error = tiles::list_all_tiles(&client, &token, &Default::default())
+        .await
+        .expect_err("a full legacy page cannot prove that no rows were truncated");
+
+    assert!(error.to_string().contains("cursor pagination is required"));
+    only.assert_async().await;
+}
+
+#[tokio::test]
 async fn get_source_tile_walks_independent_occurrence_and_placement_cursors() {
     let mut server = Server::new_async().await;
     let first = server

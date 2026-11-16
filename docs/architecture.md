@@ -137,19 +137,19 @@ prove isolation.
 
 ### Read completeness, diffs and revision conflicts
 
-- **Pagination.** `tastile-api` follows cursor pages for source-tile list
-  and placements; source-tile detail independently pages occurrences and
-  placements. The cursor request/response shape is implemented ahead of the
-  pinned OpenAPI revision to match Core PRs #302 and #305. Legacy array
-  responses are decoded during the transition, but a full 500-row array
-  without a cursor fails explicitly because the client cannot prove it is
-  complete. No `offset` parameter is sent. The
-  pinned `GET /v1/tiles` and pending-prompt list operations have no offset
-  or cursor, so those projections cannot be proven complete when the
-  server applies a result cap; the CLI makes one contract-shaped request
-  and warns when `/v1/tiles` reaches the known 500-row cap. The pinned
-  OpenAPI submodule must not be bumped until the Core contract changes are
-  merged and published.
+- **Pagination.** `tastile-api` follows cursor pages for `/v1/tiles`,
+  source-tile list and placements; source-tile detail independently pages
+  occurrences and placements. Legacy array responses are decoded during
+  the transition, but a full legacy page fails explicitly because the
+  client cannot prove it is complete. `/v1/tiles` requests the pinned
+  1,000-row maximum and rejects a cursorless 500-item response to account
+  for the pre-cursor Core cap. No `offset` parameter is sent. The pinned
+  pending-prompt list operation has no pagination contract, so its
+  completeness cannot be proven if Core adds a result cap.
+- **Today.** `tastile today` requests the full tile projection and keeps
+  only rows with a `projected_next_start_at` at or after the local current
+  instant. This filters stale past projections and entries with no known
+  next start before selecting the earliest upcoming tile.
 - **Diffs.** `source-tiles update --dry-run` compares the stored source
   tile with the proposed draft and prints changed fields exposed by the
   read model: tile metadata, plan role, duration/priority, generation,

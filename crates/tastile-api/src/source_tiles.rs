@@ -297,8 +297,7 @@ impl ListSourceTilesQuery {
     }
 }
 
-/// A page size accepted by both the pinned contract and the pending cursor
-/// contract (`1..=1000`).
+/// A page size accepted by the pinned cursor contract (`1..=1000`).
 pub const SOURCE_TILE_PAGE_SIZE: u32 = 500;
 
 /// `GET /v1/source-tiles` → `operationId: list_source_tiles`.

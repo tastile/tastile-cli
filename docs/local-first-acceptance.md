@@ -10,9 +10,9 @@ observations**, not independently verified in this repository.
 
 The pinned `openapi/openapi.yaml` (Tastile OpenAPI 1.0.1) turned out to
 disagree with the CLI in several places. The original five discrepancies
-below were fixed against the pinned contract. Review follow-up work adds
-compatibility for the upcoming cursor and required-revision contract without
-changing the OpenAPI submodule pin:
+below were fixed against the pinned contract. Review follow-up first added
+transition support for cursor and required-revision behavior; the current
+OpenAPI pin now includes those request/read contracts:
 
 | Finding | Contract | CLI before | Now |
 | --- | --- | --- | --- |
@@ -20,15 +20,14 @@ changing the OpenAPI submodule pin:
 | Placement window | `SourceWindowSchema` requires `start_offset_ms` / `end_offset_ms` with `start < end` | `{"window": "anytime"}` | `{"start_offset_ms": 0, "end_offset_ms": 14400000}` |
 | One-time generation | `SourceGenerationSchema.kind = 0` requires the `at` instant | `{"kind": 0}` | `{"kind": 0, "at": "<horizon start>"}` |
 | Tile list parameters | `GET /v1/tiles` documents `owner_ids`, `limit`, `view_mode`, `lifecycle`, `range`, `granularity`, `search`, `exclude_future` | `window_start`, `window_end`, `plan_id`, `include_closed` (all ignored by the server) | only the documented parameters |
-| Listing page size | The pinned contract uses `limit` (1..500) and `offset` | one request, no pagination | the updated client sends cursor requests per Core #305; legacy arrays decode during transition |
+| Listing page size | The pinned contract supports `limit` + `cursor` and returns `{items,count,next_cursor}` | one request, no pagination | the client follows every cursor; full legacy pages fail closed |
 
-## Incoming Core contract compatibility (pin pending)
+## Core contract compatibility (OpenAPI pin updated)
 
-Core PRs [#302](https://github.com/tastile/tastile-core/pull/302) and
-[#305](https://github.com/tastile/tastile-core/pull/305) are still unpublished
-contract changes. This branch follows their intended wire behavior while
-keeping the `openapi/` gitlink pinned until Core merges the PRs and publishes
-the updated spec:
+The formerly pending request/read contracts from Core PRs
+[#302](https://github.com/tastile/tastile-core/pull/302) and
+[#305](https://github.com/tastile/tastile-core/pull/305) are represented in
+the pinned OpenAPI revision and CLI clients:
 
 - Update, cancel and reflow send `expected_revision` by default. Update uses
   the revision from the source read displayed for its diff; cancel and reflow
@@ -39,18 +38,14 @@ the updated spec:
   `occurrence_limit` / `placement_limit`. Responses decode the new
   `{items,count,next_cursor}` page or the pinned legacy array. No `offset`
   parameter is sent.
-- A legacy array shorter than 500 items is treated as terminal. A full legacy
-  500-item page fails with an explicit pagination error because that response
-  cannot establish whether more results exist. The cursor contract is needed
-  to prove completeness above that page size.
-- The build drift gate accepts the pinned old array response and the named
-  cursor response schemas. It also fails on newly required request fields,
-  except for explicitly modeled optional fields that this CLI already sends.
-
-Do not bump the submodule to an unpublished Core spec. Track the pin update on
-[tastile-cli#6](https://github.com/tastile/tastile-cli/issues/6) and complete
-it after both Core contract changes merge and the generated/published OpenAPI
-revision is available.
+- A legacy array shorter than the server's page cap is treated as terminal.
+  Full legacy pages fail with an explicit pagination error because their
+  completeness cannot be established. The `/v1/tiles` compatibility check
+  accounts for its historical 500-item cap while still requesting the pinned
+  1,000-item maximum.
+- The build drift gate checks the pinned page response schemas and required
+  request fields. Legacy-array decoding is transition compatibility in the
+  client; it does not replace the cursor contract in OpenAPI.
 
 Gaps that the pinned contract does **not** cover, and that the CLI
 therefore refuses or works around instead of inventing wire fields:
@@ -64,12 +59,11 @@ therefore refuses or works around instead of inventing wire fields:
   target accepts the credential but cannot independently verify the token
   subject against a Core owner id or prove stack isolation. The contract has
   no `whoami` operation, so that identity check remains a gap.
-- **Some list projections cannot be paged.** `GET /v1/tiles` and the pending
-  prompt list define no offset or cursor in the pinned spec. The tile command
-  warns when its current server cap of 500 rows is reached. Prompt listing
-  currently returns all unresolved rows in Core but the contract has no
-  pagination semantics if that ever changes. Source-tile list/detail/
-  placements use the upcoming Core cursor parameters, with the pin pending.
+- **Some list projections cannot be paged.** The pinned `GET /v1/tiles` and
+  source-tile list/detail/placement operations use cursors, which the CLI
+  follows to completion. Pending-prompt list has no pagination semantics; Core
+  currently returns all unresolved rows, but completeness would be unprovable
+  if that endpoint adds a result cap without a contract change.
 - **No diff or patch endpoint.** `PUT /v1/source-tiles/{id}` is a full
   replacement. The CLI's `--dry-run` compares fields exposed by the read
   model and explicitly warns that the model omits plan details, flows,
@@ -165,10 +159,9 @@ connect to port 31400.
 | `schedule publish --apply` | offline preview passed; apply with an idempotency key succeeded, and the published source was read back through the API |
 | Cursor response compatibility | Core 1.1.0 returned the legacy array shape in this run; mock pagination tests cover `{items,count,next_cursor}`, continuation cursors, independent detail cursors, and fail-closed legacy full pages |
 
-This rerun did not exercise worker delivery/execution flows. The upcoming
-Core #302/#305 request and cursor response shapes remain covered by CLI code
-and mock tests, but are not live-verified until those Core changes are merged
-and the published OpenAPI pin is updated.
+This historical rerun did not exercise worker delivery/execution flows, and
+its Core source SHA predates the request/cursor contracts. The current pinned
+Core revision and worker-backed run are recorded below.
 
 ### Authentication mismatch (test systems only)
 
