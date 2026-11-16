@@ -63,3 +63,21 @@ Core migration runner は同じ DB に成功した。隔離 PostgreSQL container
 - `prompts list` にcursor contractがないため、将来サーバー側capが導入された場合の完走を証明できない。
 - monthly recurrence はCore/OpenAPI contract追加まで拒否。
 - Museとの運用上のshadow比較は実施していない。隔離E2EはCore実装の基本的意味論を示すもので、Muse parityを証明しない。
+
+## PR #10 review follow-up — execution lifecycle と reflow
+
+実施日: 2026-11-16 JST。Major finding のため、同じ固定 Core SHA と専用 ports で fresh PostgreSQL DB を作り直して CLI E2E を追加実施した。
+
+| 項目 | 実行・結果 |
+| --- | --- |
+| Stack | Core `5318815373b270065532b7a88c039726c17dc9ef`、`tcli6-pg` / PostgreSQL 16 image `sha256:f377d590e5474681d4d7838635031a2b50647923b7abfa803ce9b5ff35d5c663`、DB `tastile_verify` at `127.0.0.1:55503`、API `127.0.0.1:31603`、fake delivery worker。Migrations 成功。 |
+| Publish / placement | CLI `schedule publish --apply` が成功し、source `01a1e331-bf94-7c93-b96b-492951438490` を API list で readback。worker が open placement `01a1e331-bfc2-7fb3-ad40-d39a5c20ef46`（2026-11-16 07:18–07:48 UTC）を materialize し、CLI placements list で確認。 |
+| Execution lifecycle | CLI `executions start` result `0`, revision `1`; `pause` result `2`, revision `2`; `resume` result `2`, revision `3`; `finish --kind 0` result `2`, revision `4`。全応答の aggregate は execution `01a1e331-c01b-7c71-9d28-dc7e2e259e80`。Core execution view readback は state `2` (`FinishedNormal`), `segments=3`。 |
+| Reflow of executed placement | finish 後に同じ execution-linked source を reflow したところ、Core が HTTP `422` (`placement ... is protected from automatic reflow`) で拒否した。finished execution に紐づく placement は保護される。 |
+| Successful post-lifecycle reflow | その保護を越えて書き換えず、2つ目の schedule definition を publish。source `01a1e334-89fd-7381-9ec7-4feea9de54e1` の open placement `01a1e334-8a1c-7b20-8437-58192fdc505e` を readback 後、CLI `source-tiles reflow` を実行。Core は result `1` (`AlreadyApplied`: 現在の materialization が要求状態と一致) を返し、readback は placement 1件 / open 1件。 |
+
+この再実行で publish → worker placement readback → start/pause/resume/finish → reflow の順に CLI 操作を通した。reflow は execution に紐づかない open placement を対象にし、Core の保護境界と idempotent no-op の応答も記録した。認証は隔離 Core の dev signup で作成したテスト用 session credential を mode `0600` の task-local file に保存し、token は出力・証跡に含めていない。
+
+Minor finding 対応として `crates/tastile-cli/tests/unplaced_reason_output.rs` の create response fixture に reason codes `0`, `1`, `2` を含め、`INSUFFICIENT_CAPACITY`, `LIMIT_CONFLICT`, `PRIORITY_TIE_CONFLICT` と各 occurrence ID の CLI 表示を確認する。
+
+Follow-up gate: `mise run ci` 成功。fmt と clippy が clean、workspace tests `121 passed / 0 failed`（unplaced reason output tests `2 passed` を含む）、OpenAPI drift `19/19`。

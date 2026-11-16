@@ -22,10 +22,12 @@ impl Drop for TestDirectory {
 }
 
 #[tokio::test]
-async fn create_prints_core_unplaced_reason_and_conflicting_source() {
+async fn create_prints_core_unplaced_reasons_and_conflicting_source() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind mock API");
     let api_url = format!("http://{}", listener.local_addr().unwrap());
-    let occurrence_id = Uuid::new_v4();
+    let insufficient_capacity_occurrence_id = Uuid::new_v4();
+    let limit_conflict_occurrence_id = Uuid::new_v4();
+    let priority_tie_occurrence_id = Uuid::new_v4();
     let conflicting_source_id = Uuid::new_v4();
     let response = serde_json::json!({
         "command_id": Uuid::new_v4(),
@@ -35,14 +37,30 @@ async fn create_prints_core_unplaced_reason_and_conflicting_source() {
         "result": 0,
         "pending": [],
         "aggregate_meta": {
-            "unplaced_occurrences": [{
-                "occurrence_id": occurrence_id,
-                "reason": 2,
-                "required_duration_ms": 1800000,
-                "available_duration_ms": 0,
-                "blocked_at": "2026-11-16T00:00:00Z",
-                "conflicting_source_tile_id": conflicting_source_id
-            }]
+            "unplaced_occurrences": [
+                {
+                    "occurrence_id": insufficient_capacity_occurrence_id,
+                    "reason": 0,
+                    "required_duration_ms": 1800000,
+                    "available_duration_ms": 0,
+                    "blocked_at": "2026-11-16T00:00:00Z"
+                },
+                {
+                    "occurrence_id": limit_conflict_occurrence_id,
+                    "reason": 1,
+                    "required_duration_ms": 1800000,
+                    "available_duration_ms": 0,
+                    "blocked_at": "2026-11-16T00:00:00Z"
+                },
+                {
+                    "occurrence_id": priority_tie_occurrence_id,
+                    "reason": 2,
+                    "required_duration_ms": 1800000,
+                    "available_duration_ms": 0,
+                    "blocked_at": "2026-11-16T00:00:00Z",
+                    "conflicting_source_tile_id": conflicting_source_id
+                }
+            ]
         }
     })
     .to_string();
@@ -137,8 +155,21 @@ async fn create_prints_core_unplaced_reason_and_conflicting_source() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("INSUFFICIENT_CAPACITY"), "{stdout}");
+    assert!(stdout.contains("LIMIT_CONFLICT"), "{stdout}");
     assert!(stdout.contains("PRIORITY_TIE_CONFLICT"), "{stdout}");
-    assert!(stdout.contains(&occurrence_id.to_string()), "{stdout}");
+    assert!(
+        stdout.contains(&insufficient_capacity_occurrence_id.to_string()),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&limit_conflict_occurrence_id.to_string()),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&priority_tie_occurrence_id.to_string()),
+        "{stdout}"
+    );
     assert!(
         stdout.contains(&conflicting_source_id.to_string()),
         "{stdout}"
