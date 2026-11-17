@@ -75,10 +75,11 @@ if [[ ! -f "$OPENAPI_YAML" ]]; then
   exit 1
 fi
 
-# All 19 operations the typed client claims to use. The drift gate in
+# All operations the typed client claims to use. The drift gate in
 # `crates/tastile-api/build.rs` enforces each row with full structural
 # checks; this list is the human-readable summary.
 declare -a REQUIRED_OPS=(
+  get_timeline
   list_tiles
   list_pending_prompts
   request_prompt
@@ -146,6 +147,7 @@ fi
 # ---------------------------------------------------------------------------
 
 declare -a SURFACE_HINTS=(
+  "get_timeline|crates/tastile-api/src/timeline.rs"
   "list_tiles|crates/tastile-api/src/tiles.rs"
   "list_pending_prompts|crates/tastile-api/src/prompts.rs"
   "request_prompt|crates/tastile-api/src/prompts.rs"
@@ -184,7 +186,7 @@ if [[ "$DRIFT" -eq 0 ]]; then
   echo
   echo "ok: openapi drift check passed"
   echo "  ${#REQUIRED_OPS[@]} operations verified"
-  echo "  surface coverage: 19/19"
+  echo "  surface coverage: ${#SURFACE_HINTS[@]}/${#SURFACE_HINTS[@]}"
 else
   echo
   echo "fail: openapi drift detected"

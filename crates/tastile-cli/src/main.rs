@@ -71,6 +71,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Some(Command::Doctor) => commands::doctor::run(cfg).await,
         Some(Command::Tiles(args)) => commands::tiles::run(cfg, args).await,
         Some(Command::Today(args)) => commands::today::run(cfg, args).await,
+        Some(Command::Timeline(args)) => commands::timeline::run(cfg, args).await,
         Some(Command::Schedule(args)) => commands::schedule::run(cfg, args).await,
         Some(Command::SourceTiles(args)) => commands::source_tiles::run(cfg, args).await,
         Some(Command::Executions(args)) => commands::executions::run(cfg, args).await,

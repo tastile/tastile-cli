@@ -47,6 +47,7 @@ pub mod prompts;
 pub mod schedule;
 pub mod source_tiles;
 pub mod tiles;
+pub mod timeline;
 
 pub use client::{ApiClient, ApiConfig, BearerToken};
 pub use error::{ApiError, ApiResult};
@@ -77,6 +78,11 @@ pub use source_tiles::{
     list_source_tiles, reflow_source_tile, update_source_tile,
 };
 pub use tiles::{TILE_LIST_PAGE_SIZE, list_all_tiles, list_tiles};
+pub use timeline::{
+    TimelineContent, TimelineInside, TimelineItem, TimelineOwnerEmbed, TimelineOwnerProfile,
+    TimelineOwnerRef, TimelineQuery, TimelineResolution, TimelineSource, TimelineSpan,
+    TimelineViolation, TimelineVisual, get_timeline,
+};
 
 /// Compile-time API version metadata pulled from the pinned
 /// `openapi/openapi.yaml` by `tastile-api`'s `build.rs`.

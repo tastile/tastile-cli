@@ -24,7 +24,7 @@ that invariant, the change is wrong.
 | Typed Rust client surface | `crates/tastile-api/src/*.rs` |
 | Drift gate | `crates/tastile-api/build.rs` + `scripts/check-openapi-drift.sh` |
 
-The pinned spec declares 21 `operationId`s. The CLI surface covers 19
+The pinned spec declares 21 `operationId`s. The CLI surface covers 20
 of them, including the isolated local Core `publish_schedule_definition`
 operation. The 2 remaining operations (`delete_owner`, `export_owner`) are
 administrative endpoints not covered by the drift gate. `schedule publish`
