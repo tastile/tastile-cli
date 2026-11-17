@@ -179,6 +179,23 @@ async fn create(
     let resp = app::create_source_tile_draft(ctx, &draft).await?;
     println!("✓ Created source tile.");
     output::print_command_response(&resp);
+    // The create response carries the new source id in `aggregate_meta`;
+    // read its detail once so the credential's owner pin is established
+    // even when the guard probe saw an empty tile list.
+    if let Some(source_tile_id) = resp
+        .aggregate_meta
+        .as_ref()
+        .and_then(|meta| meta.get("source_tile_id"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|raw| Uuid::parse_str(raw).ok())
+    {
+        app::confirm_owner_from_source_tile(ctx, source_tile_id).await?;
+    } else {
+        tracing::warn!(
+            "create response carried no aggregate_meta.source_tile_id; \
+             the credential owner pin was not refreshed by this write"
+        );
+    }
     Ok(ExitCode::SUCCESS)
 }
 
