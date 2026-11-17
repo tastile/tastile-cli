@@ -189,6 +189,22 @@ pub struct SourceOccurrenceRead(pub serde_json::Value);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelationDefinitionRead(pub serde_json::Value);
 
+/// Spec: `components.schemas.SourceTileDefinitionSchema` (v1/14 §17) — the
+/// write-shaped definition read back from normalized persisted state for
+/// merge-or-replace editing. `schedule` stays on `SourceTileRead.schedule`,
+/// `horizon` is never persisted, and `source_client_local_id` is always
+/// null on read-back. Relation refs are normalized to `existing`; clients
+/// re-author `local` refs explicitly when needed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceTileDefinition {
+    pub tile: ScheduleTileDefinition,
+    pub plan: SchedulePlanDefinition,
+    pub flows: Vec<FlowDefinition>,
+    pub relations: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub source_client_local_id: Option<Uuid>,
+}
+
 /// Spec: `components.schemas.SourceTileDetailRead`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceTileDetailRead {
@@ -196,6 +212,9 @@ pub struct SourceTileDetailRead {
     pub relations: Vec<RelationDefinitionRead>,
     pub occurrences: Vec<SourceOccurrenceRead>,
     pub placements: Vec<PlacementTileRead>,
+    /// Optional for tolerance of pre-v3.2.0 servers; `update` requires it.
+    #[serde(default)]
+    pub definition: Option<SourceTileDefinition>,
 }
 
 /// Canonical cursor page from Core. The untagged decoder also accepts the
@@ -265,6 +284,8 @@ struct SourceTileDetailPage {
     relations: Vec<RelationDefinitionRead>,
     occurrences: ListResponse<SourceOccurrenceRead>,
     placements: ListResponse<PlacementTileRead>,
+    #[serde(default)]
+    definition: Option<SourceTileDefinition>,
 }
 
 // ---------------------------------------------------------------------------
@@ -376,7 +397,11 @@ pub async fn get_source_tile(
             relations: page.relations.clone(),
             occurrences: Vec::new(),
             placements: Vec::new(),
+            definition: page.definition.clone(),
         });
+        if detail.definition.is_none() {
+            detail.definition = page.definition.clone();
+        }
 
         if !occurrence_done {
             if page.occurrences.legacy_array
@@ -852,5 +877,91 @@ mod tests {
         let parsed: SourceTileRead = serde_json::from_value(json).expect("parses");
         assert_eq!(parsed.title, "demo");
         assert_eq!(parsed.source_state, 0);
+    }
+
+    #[test]
+    fn update_request_carries_expected_revision() {
+        let payload = UpdateSourceTilePayload {
+            tile: ScheduleTileDefinition {
+                title: "t".to_string(),
+                description: None,
+                color: None,
+                icon: None,
+                external_id: None,
+            },
+            plan: SchedulePlanDefinition {
+                role: 0,
+                completion: serde_json::json!({}),
+                planning: serde_json::json!({}),
+                metrics: vec![],
+                decisions: vec![],
+                references: vec![],
+            },
+            flows: vec![],
+            schedule: CreateSourceScheduleDefinition {
+                generation: serde_json::json!({"kind": 0}),
+                split_policy: serde_json::json!({"kind": 0}),
+                window: serde_json::json!({"start_offset_ms": 0, "end_offset_ms": 1}),
+                priority: 0,
+                required_duration_ms: 1,
+            },
+            horizon: Span {
+                start: "2026-01-01T00:00:00Z".parse().unwrap(),
+                end: "2026-01-01T01:00:00Z".parse().unwrap(),
+            },
+            relations: None,
+            source_client_local_id: None,
+        };
+        let req = UpdateSourceTileRequest::new(payload).with_expected_revision(42);
+        let json = serde_json::to_value(&req).expect("serializes");
+        assert_eq!(json["expected_revision"], 42);
+        assert!(
+            json["payload"]["relations"].is_null() || json["payload"].get("relations").is_none()
+        );
+    }
+
+    #[test]
+    fn detail_read_parses_definition_read_back() {
+        let json = serde_json::json!({
+            "source": {
+                "source_tile_id": Uuid::nil(),
+                "plan_id": Uuid::nil(),
+                "owner_id": Uuid::nil(),
+                "revision": 3,
+                "source_state": 0,
+                "title": "demo",
+                "plan_role": 0,
+                "schedule": {
+                    "required_duration_ms": 1800000,
+                    "generation": {"kind": 0, "at": "2026-09-19T09:00:00Z"},
+                    "window": {"start_offset_ms": 0, "end_offset_ms": 14400000},
+                    "split_policy": {"kind": 0},
+                    "priority": 0
+                },
+                "created_at": "2026-09-19T00:00:00Z",
+                "updated_at": "2026-09-19T00:00:00Z"
+            },
+            "relations": [],
+            "occurrences": [],
+            "placements": [],
+            "definition": {
+                "tile": {"title": "demo"},
+                "plan": {
+                    "role": 0,
+                    "completion": {"root": {"All": []}, "tasks": [], "time_requirements": []},
+                    "planning": {"nesting_rules": [], "placement_rules": []},
+                    "metrics": [],
+                    "decisions": [],
+                    "references": []
+                },
+                "flows": [],
+                "relations": [],
+                "source_client_local_id": null
+            }
+        });
+        let parsed: SourceTileDetailRead = serde_json::from_value(json).expect("parses");
+        let definition = parsed.definition.expect("definition read-back");
+        assert_eq!(definition.tile.title, "demo");
+        assert_eq!(definition.source_client_local_id, None);
     }
 }

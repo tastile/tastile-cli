@@ -283,24 +283,30 @@ async fn update(
     expect_revision: Option<i64>,
 ) -> Result<ExitCode> {
     let Some(path) = from_json else {
-        bail!("update requires --from-json PATH; see `docs/architecture.md` for the schema");
+        bail!(
+            "update requires --from-json PATH: a partial JSON patch. Fields you omit are              preserved from the server's stored definition (v1/14 §17), explicit `null`              clears nullable fields, `[]` clears collections, and `horizon` must be              supplied because Core never persists it"
+        );
     };
-    let draft =
-        load_update_draft(&path).context("could not load full replacement --from-json draft")?;
+    let patch = read_draft_value(&path).context("could not load update patch")?;
     let permit = if !dry_run {
         // Refuse ambiguous/operational targets before the authenticated
-        // pre-read used to build the diff. The permit is then reused for the
+        // pre-read used to merge the patch. The permit is then reused for the
         // mutation so the expensive identity probe runs only once.
         Some(app::guard_write(ctx).await?)
     } else {
         None
     };
     let current = app::show_source_tile(ctx, id).await?;
-    let diffs = app::diff_source_tile(&draft, &current.source);
+    let merged = app::merge_source_tile_update(&current, &patch)?;
+    let diffs = app::diff_source_tile_update(&current, &merged);
     output::print_diff(&diffs);
     println!(
-        "The API read model omits plan details, flows, horizon, request-shaped relations, and \
-         source_client_local_id; dry-run cannot compare these fields. The full replacement will send the supplied values."
+        "impact: {} occurrence(s) / {} placement(s) currently derived; Core recomputes them on update",
+        current.occurrences.len(),
+        current.placements.len()
+    );
+    println!(
+        "note: `horizon` is a materialization input Core never persists (sent, not diffed);          relation refs read back normalized to `existing` — re-author `local` refs explicitly (v1/14 §17-2)"
     );
     if dry_run {
         println!("Dry run: no write sent.");
@@ -309,7 +315,7 @@ async fn update(
     let permit = permit.ok_or_else(|| anyhow!("update apply requires write preflight"))?;
     let revision = expect_revision.unwrap_or(current.source.revision);
     let resp =
-        app::update_source_tile_draft_with_permit(ctx, id, &draft, Some(revision), &permit).await?;
+        app::update_source_tile_with_permit(ctx, id, merged, Some(revision), &permit).await?;
     println!("✓ Updated source tile.");
     output::print_command_response(&resp);
     output::print_readback(&app::read_back(ctx, id).await?);
@@ -416,14 +422,6 @@ fn load_draft(path: &str) -> Result<CreateSourceTileDraft> {
     Ok(serde_json::from_value(read_draft_value(path)?)?)
 }
 
-fn load_update_draft(path: &str) -> Result<CreateSourceTileDraft> {
-    let value = read_draft_value(path)?;
-    validate_full_update_draft(&value)?;
-    let draft = serde_json::from_value(value)?;
-    app::build_create_request(&draft)?;
-    Ok(draft)
-}
-
 fn read_draft_value(path: &str) -> Result<Value> {
     let text = if path == "-" {
         use std::io::Read as _;
@@ -434,76 +432,6 @@ fn read_draft_value(path: &str) -> Result<Value> {
         fs::read_to_string(path).with_context(|| format!("reading draft from `{path}`"))?
     };
     serde_json::from_str(&text).context("draft must be valid JSON")
-}
-
-fn validate_full_update_draft(value: &Value) -> Result<()> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| anyhow!("update draft must be a JSON object"))?;
-    for field in [
-        "title",
-        "description",
-        "color",
-        "icon",
-        "external_id",
-        "priority",
-        "required_duration_ms",
-        "horizon_start",
-        "horizon_end",
-        "plan_role",
-        "plan",
-        "flows",
-        "generation",
-        "window",
-        "split_policy",
-        "relations",
-        "source_client_local_id",
-    ] {
-        if !object.contains_key(field) {
-            bail!(
-                "update is a full replacement under the pinned OpenAPI contract; draft must explicitly include `{field}` (use null for optional tile metadata or source_client_local_id, and [] for empty collections)"
-            );
-        }
-    }
-    for field in ["description", "color", "icon", "external_id"] {
-        let field_value = &object[field];
-        if !field_value.is_null() && !field_value.is_string() {
-            bail!("update draft field `{field}` must be a string or null");
-        }
-    }
-    if !object["source_client_local_id"].is_null() && !object["source_client_local_id"].is_string()
-    {
-        bail!("update draft field `source_client_local_id` must be a UUID string or null");
-    }
-    for field in ["flows", "relations"] {
-        if !object[field].is_array() {
-            bail!("update draft field `{field}` must be an array; use [] when empty");
-        }
-    }
-    for field in ["generation", "window", "split_policy"] {
-        if !object[field].is_object() {
-            bail!("update draft field `{field}` must be an object");
-        }
-    }
-    let plan = object["plan"]
-        .as_object()
-        .ok_or_else(|| anyhow!("update draft field `plan` must be an object"))?;
-    for (field, array) in [
-        ("completion", false),
-        ("planning", false),
-        ("metrics", true),
-        ("decisions", true),
-        ("references", true),
-    ] {
-        let valid = plan
-            .get(field)
-            .is_some_and(|v| if array { v.is_array() } else { v.is_object() });
-        if !valid {
-            let kind = if array { "array" } else { "object" };
-            bail!("full update plan must include `{field}` as an {kind}");
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -595,51 +523,5 @@ mod tests {
     fn excluded_dates_are_validated() {
         assert!(parse_excluded_date("2026-12-25").is_ok());
         assert!(parse_excluded_date("25/12/2026").is_err());
-    }
-
-    #[test]
-    fn full_update_requires_every_contract_replacement_field() {
-        let mut draft = serde_json::json!({
-            "title": "complete",
-            "description": null,
-            "color": null,
-            "icon": null,
-            "external_id": null,
-            "priority": 0,
-            "required_duration_ms": 1800000,
-            "horizon_start": "2026-11-15T00:00:00Z",
-            "horizon_end": "2026-11-29T00:00:00Z",
-            "plan_role": 0,
-            "plan": {
-                "completion": {"root": {"All": []}, "tasks": [], "time_requirements": []},
-                "planning": {"nesting_rules": [], "placement_rules": []},
-                "metrics": [], "decisions": [], "references": []
-            },
-            "flows": [],
-            "generation": {"kind": 0, "at": "2026-11-15T00:00:00Z"},
-            "window": {"start_offset_ms": 0, "end_offset_ms": 14400000},
-            "split_policy": {"kind": 0},
-            "relations": [],
-            "source_client_local_id": null
-        });
-        assert!(validate_full_update_draft(&draft).is_ok());
-        let mut missing_client_id = draft.clone();
-        missing_client_id
-            .as_object_mut()
-            .unwrap()
-            .remove("source_client_local_id");
-        assert!(
-            validate_full_update_draft(&missing_client_id)
-                .unwrap_err()
-                .to_string()
-                .contains("`source_client_local_id`")
-        );
-        draft.as_object_mut().unwrap().remove("plan");
-        assert!(
-            validate_full_update_draft(&draft)
-                .unwrap_err()
-                .to_string()
-                .contains("`plan`")
-        );
     }
 }

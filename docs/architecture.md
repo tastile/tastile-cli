@@ -150,19 +150,20 @@ prove isolation.
   only rows with a `projected_next_start_at` at or after the local current
   instant. This filters stale past projections and entries with no known
   next start before selecting the earliest upcoming tile.
-- **Diffs.** `source-tiles update --dry-run` compares the stored source
-  tile with the proposed draft and prints changed fields exposed by the
-  read model: tile metadata, plan role, duration/priority, generation,
-  window and split policy. The API read model omits the full plan body,
-  flows, horizon, request-shaped relations and `source_client_local_id`, so
-  the CLI warns that those values are not diffed.
-- **Full replacement.** `PUT /v1/source-tiles/{id}` replaces the complete
-  payload; the pinned contract has no PATCH or diff endpoint. Update
-  therefore requires a JSON draft with every replacement field, including
-  explicit `null` values for optional tile metadata and explicit empty
-  arrays when appropriate. Keep the original request-shaped plan, flows,
-  horizon, relations and `source_client_local_id`: the read model cannot
-  reconstruct them safely.
+- **Diffs.** `source-tiles update --dry-run` merges the patch onto the
+  `definition` read-back (v1/14 §17) and diffs the resulting payload
+  against the stored definition field-by-field: tile, plan, schedule,
+  flows, relations and `source_client_local_id`. `horizon` is excluded
+  because Core never persists it.
+- **Merge-or-replace.** `PUT /v1/source-tiles/{id}` replaces the complete
+  payload; the pinned contract has no PATCH or diff endpoint. The CLI
+  rebuilds that payload from `SourceTileDetailRead.definition` plus
+  `source.schedule`, so omitted patch fields are preserved instead of
+  silently reset. Explicit `null` clears nullable fields, `[]` clears
+  collections, `plan` subfields merge individually, and `horizon` must be
+  supplied on every update because it is a materialization input Core
+  never persists. Relation refs read back normalized to `existing`
+  (§17-2); `local` authoring syntax is not preserved.
 - **Revision conflicts.** Update uses the revision from the read shown in
   its diff; cancel and reflow fetch the current revision before mutation.
   `--expect-revision` overrides that default. Each value maps to the

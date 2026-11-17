@@ -59,7 +59,7 @@ cargo build --release
 | `tastile source-tiles list` | List every source tile (paginated; no silent 100-row cap). |
 | `tastile source-tiles get <id>` | Show one source tile + every occurrence and placement (paginated). |
 | `tastile source-tiles create --title … --once/--daily/--weekly` | Create a source tile from a short recurrence description (or `--from-json`). |
-| `tastile source-tiles update <id> --from-json` | Full replacement update; requires the complete payload (`--dry-run` compares visible fields, `--expect-revision` detects conflicts). |
+| `tastile source-tiles update <id> --from-json` | Merge-or-replace update: omitted fields are preserved from the stored definition; `--dry-run` diffs the merged payload, `--expect-revision` detects conflicts. |
 | `tastile source-tiles cancel <id>` | Cancel a source tile (`--dry-run` shows the affected placements). |
 | `tastile source-tiles completion <id>` | Show the completion plan tree. |
 | `tastile source-tiles placements <id>` | List every placement of a source tile (paginated). |
