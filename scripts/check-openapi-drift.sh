@@ -7,7 +7,7 @@
 # 1. The submodule pointer is present and points to a concrete SHA.
 # 2. Every operationId the Rust client surface claims to use still exists
 #    in the pinned `openapi/openapi.yaml`.
-# 3. The 19 surface operations are exercised by the right Rust modules.
+# 3. The surface operations are exercised by the right Rust modules.
 # 4. The pinned spec is OpenAPI 3.1.x with the expected `info.title` and
 #    `info.version` we pin in `crates/tastile-api/build.rs`.
 # 5. Every /v1 path in the pinned spec exists (no missing wire entries).

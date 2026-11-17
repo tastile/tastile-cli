@@ -151,7 +151,7 @@ pub struct TimelineArgs {
     pub parent_placement_id: Option<Uuid>,
 
     /// Comma-separated or repeated owner UUIDs; defaults to the caller.
-    #[arg(long = "owner", value_name = "UUID")]
+    #[arg(long = "owner", value_name = "UUID", value_delimiter = ',')]
     pub owners: Vec<Uuid>,
 
     /// Page size; omitted returns the complete in-range set.
