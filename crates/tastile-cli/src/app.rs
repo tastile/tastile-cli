@@ -1257,9 +1257,13 @@ impl PromptKind {
 
 pub async fn list_pending_prompts(ctx: &AppContext) -> Result<Vec<tastile_api::PromptView>> {
     let token = ctx.require_token()?;
-    tastile_api::list_pending_prompts(ctx, token)
-        .await
-        .context("list_pending_prompts failed")
+    tastile_api::list_all_pending_prompts(
+        ctx,
+        token,
+        &tastile_api::ListPendingPromptsQuery::default(),
+    )
+    .await
+    .context("list_pending_prompts failed")
 }
 
 pub async fn resolve_prompt(

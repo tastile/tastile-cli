@@ -58,8 +58,9 @@ pub use executions::{
 };
 pub use model::{ApiVersion, CommandResponse, OwnerDeleteResponse, PendingWork, TileListView};
 pub use prompts::{
-    PromptSubject, PromptView, RequestPromptRequest, ResolvePromptRequest, StartupRecoveryPayload,
-    StartupRecoveryRequest, list_pending_prompts, request_prompt, resolve_prompt,
+    ListPendingPromptsQuery, PENDING_PROMPTS_PAGE_SIZE, PromptSubject, PromptView,
+    RequestPromptRequest, ResolvePromptRequest, StartupRecoveryPayload, StartupRecoveryRequest,
+    list_all_pending_prompts, list_pending_prompts, request_prompt, resolve_prompt,
     respond_startup_recovery,
 };
 pub use schedule::{

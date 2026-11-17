@@ -145,10 +145,13 @@ the owner or prove the stack is isolated; only the operator can attest isolation
 See [docs/cli-operations.md](./docs/cli-operations.md) for the full
 operation guide, expected error messages and a safe stop/resume procedure.
 The pinned `GET /v1/tiles`, source-tile list, detail and placement endpoints
-support cursor pagination; the CLI follows each cursor to completion. Pending
-prompt listing has no pagination contract. Legacy array responses are still
-decoded during migration, but full legacy pages fail explicitly because the
-client cannot prove they are complete. The `/v1/tiles` reader also rejects a
+support cursor pagination; the CLI follows each cursor to completion.
+`GET /v1/prompts/pending` follows the same §15 cursor contract on migrated
+Core releases; because the pre-cursor endpoint returned the complete set
+without a cap, a legacy bare-array response is accepted as complete. Legacy
+array responses are still decoded during migration, but full legacy pages on
+the capped endpoints fail explicitly because the client cannot prove they
+are complete. The `/v1/tiles` reader also rejects a
 500-row legacy response, matching the pre-cursor Core cap even though the
 pinned page size is 1,000.
 

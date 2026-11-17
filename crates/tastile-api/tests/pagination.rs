@@ -3,7 +3,7 @@
 //! truncated.
 
 use mockito::{Matcher, Server};
-use tastile_api::{ApiClient, ApiConfig, BearerToken, source_tiles, tiles};
+use tastile_api::{ApiClient, ApiConfig, BearerToken, prompts, source_tiles, tiles};
 
 fn source_tile_json(index: usize) -> String {
     format!(
@@ -587,5 +587,96 @@ async fn full_legacy_detail_collection_page_fails_instead_of_silently_truncating
         .expect_err("a full legacy detail page cannot prove completeness");
 
     assert!(error.to_string().contains("cursor pagination is required"));
+    only.assert_async().await;
+}
+
+fn prompt_view_json(index: usize) -> serde_json::Value {
+    serde_json::json!({
+        "id": format!("00000000-0000-0000-0002-{index:012}"),
+        "kind": 2,
+        "created_at": "2026-09-19T00:00:00Z"
+    })
+}
+
+fn prompt_page(start: usize, count: usize, next_cursor: Option<&str>) -> String {
+    let rows: Vec<serde_json::Value> = (start..start + count).map(prompt_view_json).collect();
+    response_page(rows, next_cursor).to_string()
+}
+
+#[tokio::test]
+async fn list_all_pending_prompts_follows_next_cursor() {
+    let mut server = Server::new_async().await;
+    let first = server
+        .mock("GET", "/v1/prompts/pending")
+        .match_query(Matcher::Regex("limit=1000$".into()))
+        .with_body(prompt_page(0, 2, Some("prompts-next")))
+        .create_async()
+        .await;
+    let second = server
+        .mock("GET", "/v1/prompts/pending")
+        .match_query(Matcher::Regex("limit=1000&cursor=prompts-next".into()))
+        .with_body(prompt_page(2, 3, None))
+        .create_async()
+        .await;
+
+    let client = ApiClient::new(ApiConfig::new(&server.url()).expect("valid url")).expect("client");
+    let token = BearerToken::new("test-token");
+
+    let all = prompts::list_all_pending_prompts(&client, &token, &Default::default())
+        .await
+        .expect("lists");
+
+    assert_eq!(
+        all.len(),
+        5,
+        "every row across both cursor pages must be returned"
+    );
+    first.assert_async().await;
+    second.assert_async().await;
+}
+
+#[tokio::test]
+async fn list_all_pending_prompts_rejects_a_repeated_cursor() {
+    let mut server = Server::new_async().await;
+    server
+        .mock("GET", "/v1/prompts/pending")
+        .match_query(Matcher::Regex("limit=1000$".into()))
+        .with_body(prompt_page(0, 1, Some("prompts-loop")))
+        .create_async()
+        .await;
+    server
+        .mock("GET", "/v1/prompts/pending")
+        .match_query(Matcher::Regex("limit=1000&cursor=prompts-loop".into()))
+        .with_body(prompt_page(1, 1, Some("prompts-loop")))
+        .create_async()
+        .await;
+
+    let client = ApiClient::new(ApiConfig::new(&server.url()).expect("valid url")).expect("client");
+    let token = BearerToken::new("test-token");
+
+    let error = prompts::list_all_pending_prompts(&client, &token, &Default::default())
+        .await
+        .expect_err("a repeated cursor must not loop forever");
+
+    assert!(error.to_string().contains("repeated cursor"));
+}
+
+#[tokio::test]
+async fn pending_prompt_list_still_decodes_the_pinned_array_response() {
+    let mut server = Server::new_async().await;
+    let only = server
+        .mock("GET", "/v1/prompts/pending")
+        .match_query(Matcher::Regex("limit=1000$".into()))
+        .with_body(format!("[{}]", prompt_view_json(0)))
+        .create_async()
+        .await;
+
+    let client = ApiClient::new(ApiConfig::new(&server.url()).expect("valid url")).expect("client");
+    let token = BearerToken::new("test-token");
+    let all = prompts::list_all_pending_prompts(&client, &token, &Default::default())
+        .await
+        .expect("legacy pinned response is the complete set");
+
+    assert_eq!(all.len(), 1);
     only.assert_async().await;
 }

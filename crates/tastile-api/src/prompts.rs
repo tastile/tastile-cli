@@ -6,6 +6,8 @@
 //! - `POST /v1/prompts/{prompt_id}/resolve` → `resolve_prompt`
 //! - `POST /v1/prompts/startup-recovery`    → `respond_startup_recovery`
 
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -13,6 +15,7 @@ use uuid::Uuid;
 use crate::client::{ApiClient, BearerToken};
 use crate::error::ApiResult;
 use crate::model::CommandResponse;
+use crate::source_tiles::ListResponse;
 
 /// Spec: `components.schemas.PromptSubjectSchema` — opaque JSON.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,12 +36,89 @@ pub struct PromptView {
     pub subject: Option<PromptSubject>,
 }
 
+/// Query parameters for `GET /v1/prompts/pending`.
+///
+/// The pinned spec predates the §15 cursor migration, so these parameters
+/// are not yet documented there; Core already accepts `limit` / `cursor`
+/// and rejects `offset` (v1/14 §15-2).
+#[derive(Debug, Default, Clone)]
+pub struct ListPendingPromptsQuery {
+    /// Page size. The server default is 100 and the maximum is 1000;
+    /// an out-of-range value is rejected with `422`, never clamped.
+    pub limit: Option<i64>,
+    /// Opaque keyset cursor returned by the previous page.
+    pub cursor: Option<String>,
+}
+
+impl ListPendingPromptsQuery {
+    fn to_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        if let Some(v) = self.limit {
+            out.push(("limit", v.to_string()));
+        }
+        if let Some(v) = &self.cursor {
+            out.push(("cursor", v.clone()));
+        }
+        out
+    }
+}
+
+/// A page size accepted by the §15 cursor contract (`1..=1000`).
+pub const PENDING_PROMPTS_PAGE_SIZE: i64 = 1000;
+
 /// `GET /v1/prompts/pending` → `operationId: list_pending_prompts`.
+///
+/// Returns a single page of the §15 `ListResponse` envelope. Use
+/// [`list_all_pending_prompts`] to walk `next_cursor` to completion. The
+/// untagged decoder also accepts the pre-cursor bare-array response while
+/// the OpenAPI pin predates the migration.
 pub async fn list_pending_prompts(
     client: &ApiClient,
     token: &BearerToken,
+    q: &ListPendingPromptsQuery,
+) -> ApiResult<ListResponse<PromptView>> {
+    client
+        .get_json(token, "/v1/prompts/pending", &q.to_pairs())
+        .await
+}
+
+/// Fetch every pending-prompt page until Core returns no `next_cursor`.
+///
+/// A legacy bare-array response is already the complete set: the
+/// pre-cursor endpoint returned all unresolved prompts without a cap, so
+/// there is nothing further to page through.
+pub async fn list_all_pending_prompts(
+    client: &ApiClient,
+    token: &BearerToken,
+    q: &ListPendingPromptsQuery,
 ) -> ApiResult<Vec<PromptView>> {
-    client.get_json(token, "/v1/prompts/pending", &[]).await
+    let mut out: Vec<PromptView> = Vec::new();
+    let mut cursor = q.cursor.clone();
+    let mut seen = HashSet::new();
+    if let Some(first) = &cursor {
+        seen.insert(first.clone());
+    }
+    loop {
+        let page_query = ListPendingPromptsQuery {
+            limit: Some(PENDING_PROMPTS_PAGE_SIZE),
+            cursor,
+        };
+        let page = list_pending_prompts(client, token, &page_query).await?;
+        out.extend(page.items);
+        if page.legacy_array {
+            break;
+        }
+        let Some(next_cursor) = page.next_cursor else {
+            break;
+        };
+        if !seen.insert(next_cursor.clone()) {
+            return Err(crate::error::ApiError::Pagination(
+                "pending-prompt list returned a repeated cursor".into(),
+            ));
+        }
+        cursor = Some(next_cursor);
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
