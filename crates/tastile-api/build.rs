@@ -107,7 +107,10 @@ const CONTRACTS: &[OperationContract] = &[
         method: "get",
         path: "/v1/prompts/pending",
         request_body_schema: None,
-        response_200: ResponseSpec::ArrayOf("PromptView"),
+        response_200: ResponseSpec::CursorListOrArrayOf {
+            legacy_item: "PromptView",
+            cursor_schema: "PromptListResponse",
+        },
         path_params: &[],
         required_envelope_fields: &[],
         payload_required_fields: &[],

@@ -74,8 +74,11 @@ collapse; `--min-duration-ms` / `--min-recurring-step-ms` /
 and source-tile detail collections follow cursor pages. A full legacy array
 fails closed because its completeness cannot be established. For `/v1/tiles`,
 the CLI requests the contract maximum of 1,000 but rejects a cursorless
-500-item legacy response, matching the old Core cap. `prompts list` has no
-pagination parameters in the pinned contract. The client sends no `offset`.
+500-item legacy response, matching the old Core cap. `prompts list` follows
+the §15 cursor contract on migrated Core releases (`limit` / `cursor`,
+page size 1,000); the pinned spec still declares the legacy array, and a
+legacy bare-array response is accepted as the complete set because the
+pre-cursor endpoint was uncapped. The client sends no `offset`.
 
 `tastile today` requests future projections and filters out rows whose
 `projected_next_start_at` is in the past or absent, so a stale projection
