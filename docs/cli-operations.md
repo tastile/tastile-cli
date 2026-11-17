@@ -132,42 +132,40 @@ error: update_source_tile failed: http 409: {"kind":"Conflict",
 "message":"stale revision: have=13, expected=12", ...}
 ```
 
-Update is a full replacement (`PUT`), not a patch. Its JSON draft must
-include `title`, `description`, `color`, `icon`, `external_id`, `priority`,
-`required_duration_ms`, `horizon_start`, `horizon_end`, `plan_role`, `plan`,
-`flows`, `generation`, `window`, `split_policy`, `relations`, and
-`source_client_local_id`. Use explicit `null` for optional tile metadata,
-`source_client_local_id`, and `[]` for empty collections. The read model
-omits plan details, flows, horizon, the local client id and request-shaped
-relations, so preserve those values from the original request when editing.
-The dry-run warning also names `source_client_local_id`, which is absent from
-the read model and cannot be recovered from `get` output.
+Update is a merge-or-replace (`PUT` of a rebuilt full payload). The CLI reads
+the source tile detail — including the `definition` read-back (v1/14 §17) —
+and applies the patch on top, so fields you omit are preserved rather than
+silently reset. The patch is a JSON object; every field is optional:
+
+- `title`, `description`, `color`, `icon`, `external_id` — tile metadata.
+  `null` clears the nullable fields; `title` must be a string.
+- `plan` — object merged per subfield (`role`, `completion`, `planning`,
+  `metrics`, `decisions`, `references`); an absent subfield keeps the stored
+  value, an array `[]` clears a collection subfield.
+- `plan_role`, `priority`, `required_duration_ms`, `generation`, `window`,
+  `split_policy` — schedule/plan scalars; absent keeps the stored value.
+- `flows` — array replaces the complete flow set; absent keeps it.
+- `relations` — absent keeps the stored relation payloads (read back
+  normalized to `existing` per §17-2, so `local` authoring syntax is not
+  preserved); `[]` or `null` clears all relations.
+- `source_client_local_id` — never persisted, so read-back is always `null`;
+  supply a UUID string to re-assign it.
+- `horizon` — required on every update because Core never persists it;
+  supply `{"start": RFC3339, "end": RFC3339}` or `horizon_start` +
+  `end` + `horizon_end`.
 
 ```json
 {
-  "title": "Standup",
-  "description": null,
-  "color": null,
-  "icon": null,
-  "external_id": null,
-  "priority": 0,
-  "required_duration_ms": 900000,
-  "horizon_start": "2026-11-20T00:00:00Z",
-  "horizon_end": "2026-12-20T00:00:00Z",
-  "plan_role": 0,
-  "plan": {
-    "completion": {"root": {"All": []}, "tasks": [], "time_requirements": []},
-    "planning": {"nesting_rules": [], "placement_rules": []},
-    "metrics": [], "decisions": [], "references": []
-  },
-  "flows": [],
-  "generation": {"kind": 1, "starts_at": "2026-11-20T00:30:00Z", "interval_ms": 86400000, "offset_min": 540},
-  "window": {"start_offset_ms": 0, "end_offset_ms": 14400000},
-  "split_policy": {"kind": 0},
-  "relations": [],
-  "source_client_local_id": null
+  "title": "Standup (renamed)",
+  "plan": {"metrics": [{"kind": 0}]},
+  "priority": 5,
+  "horizon": {"start": "2026-11-20T00:00:00Z", "end": "2026-12-20T00:00:00Z"}
 }
 ```
+
+`--dry-run` prints the field-level diff between the stored definition and
+the merged payload (tile, plan, schedule, flows, relations) plus the number
+of derived occurrences and placements the update will recompute.
 
 ### Cancel and reflow
 

@@ -750,13 +750,6 @@ const UPDATE_PATCH_FIELDS: &[&str] = &[
     "horizon_end",
 ];
 
-fn patch_field<'a>(
-    patch: &'a serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Result<Option<&'a serde_json::Value>> {
-    Ok(patch.get(key))
-}
-
 /// Merge an update patch into a complete `UpdateSourceTilePayload` using the
 /// detail read's `definition` (v1/14 §17) plus `source.schedule` as the
 /// preservation base.
@@ -788,7 +781,7 @@ pub fn merge_source_tile_update(
         .as_object_mut()
         .ok_or_else(|| anyhow!("internal: tile definition did not serialize to an object"))?;
     for key in UPDATE_TILE_FIELDS {
-        let Some(value) = patch_field(patch_obj, key)? else {
+        let Some(value) = patch_obj.get(*key) else {
             continue;
         };
         if *key == "title" {
