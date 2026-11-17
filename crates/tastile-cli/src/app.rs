@@ -17,8 +17,9 @@ use tastile_api::{
     CreateSourceScheduleDefinition, CreateSourceTilePayload, CreateSourceTileRequest,
     ExecutionLifecycleRequest, FinishExecutionRequest, PlacementTileRead, ReflowSourceTileRequest,
     SchedulePlanDefinition, ScheduleTileDefinition, SourceTileDetailRead, SourceTileRead, Span,
-    StartExecutionRequest, TileListView, UpdateSourceTilePayload, UpdateSourceTileRequest,
-    executions, source_tiles as api_source_tiles, tiles as api_tiles,
+    StartExecutionRequest, TileListView, TimelineItem, TimelineQuery, UpdateSourceTilePayload,
+    UpdateSourceTileRequest, executions, source_tiles as api_source_tiles, tiles as api_tiles,
+    timeline as api_timeline,
 };
 use tastile_auth::{CredentialStore, KeyringStore};
 use tastile_config::Config;
@@ -539,6 +540,15 @@ pub async fn list_source_tiles(
     api_source_tiles::list_all_source_tiles(ctx, token, &q)
         .await
         .context("list_source_tiles failed")
+}
+
+/// `GET /v1/timeline` — placements intersecting a required range. Read-only;
+/// LABEL (`role = 1`) items are non-blocking and never count as busy time.
+pub async fn timeline(ctx: &AppContext, query: &TimelineQuery) -> Result<Vec<TimelineItem>> {
+    let token = ctx.require_token()?;
+    api_timeline::get_timeline(ctx, token, query)
+        .await
+        .context("get_timeline failed")
 }
 
 /// Gate every mutating operation.

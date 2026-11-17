@@ -10,6 +10,7 @@
 //! Internal operation IDs are surfaced by `tastile version`.
 
 use clap::{Args, Parser, Subcommand, ValueHint};
+use uuid::Uuid;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -41,6 +42,9 @@ pub enum Command {
 
     /// Show the next actionable item.
     Today(TodayArgs),
+
+    /// List placements intersecting a time range.
+    Timeline(TimelineArgs),
 
     /// Schedule operations (regenerate, publish).
     Schedule(ScheduleArgs),
@@ -112,6 +116,69 @@ pub struct TilesArgs {
 #[derive(Debug, Args)]
 pub struct TodayArgs {
     /// Output JSON instead of the human-readable table.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TimelineArgs {
+    /// Range start (RFC 3339); required, must be before --end. Window at most 31 days.
+    #[arg(long)]
+    pub start: String,
+
+    /// Range end (RFC 3339); required.
+    #[arg(long)]
+    pub end: String,
+
+    /// Include non-blocking LABEL (role = 1) periods; they never count as busy time.
+    #[arg(long)]
+    pub include_labels: bool,
+
+    /// Include CLOSED placements.
+    #[arg(long)]
+    pub include_closed: bool,
+
+    /// Include BLOCKED placements (with their violations).
+    #[arg(long)]
+    pub include_blocked: bool,
+
+    /// Include placements nested under a parent.
+    #[arg(long)]
+    pub include_nested: bool,
+
+    /// Restrict to placements nested under this parent (requires --include-nested).
+    #[arg(long)]
+    pub parent_placement_id: Option<Uuid>,
+
+    /// Comma-separated or repeated owner UUIDs; defaults to the caller.
+    #[arg(long = "owner", value_name = "UUID", value_delimiter = ',')]
+    pub owners: Vec<Uuid>,
+
+    /// Page size; omitted returns the complete in-range set.
+    #[arg(long)]
+    pub limit: Option<u32>,
+
+    /// Row offset applied independently of --limit.
+    #[arg(long)]
+    pub offset: Option<u32>,
+
+    /// Collapse overlapping relation-derived items into one representative per month.
+    #[arg(long)]
+    pub month: bool,
+
+    /// Hide placements shorter than this many milliseconds.
+    #[arg(long)]
+    pub min_duration_ms: Option<i64>,
+
+    /// Hide recurring placements whose cadence is at or below this step (ms).
+    #[arg(long)]
+    pub min_recurring_step_ms: Option<i64>,
+
+    /// Comma-separated numeric PlacementSource values to exclude.
+    #[arg(long, value_name = "KIND[,KIND...]")]
+    pub exclude_source_kinds: Option<String>,
+
+    /// Print the raw JSON response.
     #[arg(long)]
     pub json: bool,
 }

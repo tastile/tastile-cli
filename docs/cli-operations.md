@@ -53,7 +53,20 @@ tastile source-tiles placements <source-tile-id>
 tastile today
 tastile tiles --lifecycle ready
 tastile tiles --search "rust" --json
+
+# placements intersecting a required range (window at most 31 days)
+tastile timeline --start 2026-11-20T00:00:00Z --end 2026-11-21T00:00:00Z
+tastile timeline --start ... --end ... --include-labels --include-blocked --include-nested --json
 ```
+
+`GET /v1/timeline` returns a bare array ordered by `span.start ASC,
+placement_id ASC` — there is no cursor contract, so an omitted `--limit`
+returns the complete in-range set. `include_labels` adds the non-blocking
+LABEL (`role = 1`) periods; the table marks them `LABEL` and prints a
+footer reminding that they never count as busy time. `--parent-placement-id`
+requires `--include-nested`; `--month` requests the `summary=month`
+collapse; `--min-duration-ms` / `--min-recurring-step-ms` /
+`--exclude-source-kinds` map to the same-named query parameters.
 
 `GET /v1/tiles` supports `owner_ids`, `limit`, `cursor`, `view_mode`,
 `lifecycle`, `range`, `granularity`, `search` and `exclude_future`.

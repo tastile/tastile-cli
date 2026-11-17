@@ -359,3 +359,84 @@ pub fn print_readback(state: &crate::app::SourceTileState) {
         state.source_state, state.revision, state.placements_total, state.placements_open
     );
 }
+
+/// Print timeline items ordered as the server returns them
+/// (`span.start ASC, placement_id ASC`). LABEL (`role = 1`) rows are
+/// non-blocking label periods and are counted separately — they never
+/// count as busy time (v1/14 §4).
+pub fn print_timeline(items: &[tastile_api::TimelineItem]) {
+    if items.is_empty() {
+        println!("(no placements in range)");
+        return;
+    }
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(items.len());
+    let mut label_count = 0usize;
+    for item in items {
+        if item.role == 1 {
+            label_count += 1;
+        }
+        rows.push(vec![
+            item.span.start.format("%Y-%m-%d %H:%M").to_string(),
+            item.span.end.format("%H:%M").to_string(),
+            timeline_role(item),
+            timeline_title(item),
+            timeline_state(item),
+            timeline_notes(item),
+        ]);
+    }
+    print_table(&["start", "end", "role", "title", "state", "notes"], rows);
+    if label_count > 0 {
+        println!(
+            "{label_count} LABEL item(s) are non-blocking label periods; they never count as busy time."
+        );
+    }
+}
+
+fn timeline_role(item: &tastile_api::TimelineItem) -> String {
+    match item.role {
+        0 => "EXEC".to_string(),
+        1 => "LABEL".to_string(),
+        other => format!("role={other}"),
+    }
+}
+
+fn timeline_title(item: &tastile_api::TimelineItem) -> String {
+    if item.inside.is_some() {
+        format!("  {}", item.content.title)
+    } else {
+        item.content.title.clone()
+    }
+}
+
+fn timeline_state(item: &tastile_api::TimelineItem) -> String {
+    match item.resolution.state {
+        0 => "open".to_string(),
+        1 => "closed".to_string(),
+        2 => format!("BLOCKED({})", item.resolution.violations.len()),
+        other => format!("state={other}"),
+    }
+}
+
+fn timeline_notes(item: &tastile_api::TimelineItem) -> String {
+    let mut notes = Vec::new();
+    if item.inside.is_some() {
+        notes.push("nested".to_string());
+    }
+    if let (Some(split_index), Some(split_count)) = (item.split_index, item.split_count) {
+        if split_count > 1 {
+            notes.push(format!("split {split_index}/{split_count}"));
+        }
+    }
+    match item.source.kind {
+        0 => notes.push("manual".to_string()),
+        1 => notes.push("recurring".to_string()),
+        2 => notes.push("flow".to_string()),
+        3 => notes.push("import".to_string()),
+        4 => notes.push("source".to_string()),
+        other => notes.push(format!("source={other}")),
+    }
+    if let Some(owner) = &item.owner {
+        notes.push(format!("owner:{}", owner.profile.display_name));
+    }
+    notes.join(", ")
+}

@@ -83,6 +83,16 @@ struct OperationContract {
 /// of truth for what the CLI exercises from the pinned spec.
 const CONTRACTS: &[OperationContract] = &[
     OperationContract {
+        operation_id: "get_timeline",
+        method: "get",
+        path: "/v1/timeline",
+        request_body_schema: None,
+        response_200: ResponseSpec::ArrayOf("TimelineItemSchema"),
+        path_params: &[],
+        required_envelope_fields: &[],
+        payload_required_fields: &[],
+    },
+    OperationContract {
         operation_id: "list_tiles",
         method: "get",
         path: "/v1/tiles",

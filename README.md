@@ -55,6 +55,7 @@ cargo build --release
 | `tastile auth logout` | Remove the local token; attempt guarded server-side revocation. |
 | `tastile doctor` | Diagnostics: toolchain, credential store, API reachability. |
 | `tastile today` | Show the next tile with a projected start that has not passed. |
+| `tastile timeline --start … --end …` | List placements intersecting a range (`--include-labels/--include-closed/--include-blocked/--include-nested`, `--json`). |
 | `tastile tiles` | List tiles in the current day window. |
 | `tastile source-tiles list` | List every source tile (paginated; no silent 100-row cap). |
 | `tastile source-tiles get <id>` | Show one source tile + every occurrence and placement (paginated). |
@@ -186,7 +187,7 @@ HTTP shape. The drift gate in `crates/tastile-api/build.rs` enforces:
    the right method, path parameters, request body schema, required
    payload fields, and 200 response shape.
 
-The CLI surface covers **19 of the 21** operations in the pinned spec.
+The CLI surface covers **20 of the 21** operations in the pinned spec.
 The remaining 2 administrative operations (`delete_owner`, `export_owner`)
 are intentionally out of scope and not in the drift-gate contract table.
 The newly covered `publish_schedule_definition` operation requires a full
