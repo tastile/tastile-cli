@@ -190,6 +190,11 @@ async fn create(
         .and_then(|raw| Uuid::parse_str(raw).ok())
     {
         app::confirm_owner_from_source_tile(ctx, source_tile_id).await?;
+    } else {
+        tracing::warn!(
+            "create response carried no aggregate_meta.source_tile_id; \
+             the credential owner pin was not refreshed by this write"
+        );
     }
     Ok(ExitCode::SUCCESS)
 }

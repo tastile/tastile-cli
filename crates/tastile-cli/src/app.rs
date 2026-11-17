@@ -139,8 +139,18 @@ impl AppContext {
         let Some(owner) = observed.iter().next() else {
             return Ok(());
         };
-        if let Some(pinned) = self.credential_owner_id.as_deref() {
-            if pinned != owner.as_str() {
+        let owner = Uuid::parse_str(owner)
+            .map_err(|e| anyhow!("write target reported a malformed owner id: {e}"))?;
+        if let Some(pinned) = self
+            .credential_owner_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let pinned = Uuid::parse_str(pinned).map_err(|e| {
+                anyhow!("the stored credential owner pin `{pinned}` is not a UUID: {e}")
+            })?;
+            if pinned != owner {
                 bail!(
                     "the stored credential is pinned to owner {pinned} but the write target \
                      reports owner {owner}; refusing to write. Run `tastile auth login` \
@@ -149,22 +159,40 @@ impl AppContext {
             }
             return Ok(());
         }
-        self.persist_owner_pin(
-            Uuid::parse_str(owner).map_err(|e| {
-                anyhow!("write target reported a malformed owner id `{owner}`: {e}")
-            })?,
-        )
+        self.persist_owner_pin(owner)
     }
 
     /// Record the observed Core owner id on the stored credential so later
     /// processes can detect a token/account mismatch on the same API base.
+    ///
+    /// The store is re-read before writing: a pin committed by another
+    /// process (or earlier in this context's lifetime) is compared against
+    /// the fresh observation and mismatches fail closed instead of being
+    /// silently accepted. The reloaded credential must still bind to the
+    /// configured API base so a concurrent `auth login` cannot pin the
+    /// observed owner onto a credential minted for a different target.
     fn persist_owner_pin(&self, owner_id: Uuid) -> Result<()> {
         let store = credential_store(&self.config)?;
         let mut stored = store
             .load(tastile_auth::DEFAULT_SERVICE, tastile_auth::DEFAULT_USER)
             .context("credential store error")?
             .ok_or_else(|| anyhow!("no stored API credential; run `tastile auth login`"))?;
-        if stored.owner_id.is_some() {
+        if !crate::safety::api_bases_match(&self.config.api_url, &stored.api_base_url) {
+            bail!(
+                "the stored credential changed while pinning the owner id; \
+                 refusing to write. Retry the command"
+            );
+        }
+        if let Some(existing) = stored.owner_id.as_deref() {
+            let existing = Uuid::parse_str(existing.trim())
+                .map_err(|e| anyhow!("the stored credential owner pin is not a UUID: {e}"))?;
+            if existing != owner_id {
+                bail!(
+                    "the stored credential is pinned to owner {existing} but the write target \
+                     reports owner {owner_id}; refusing to write. Run `tastile auth login` \
+                     for the intended account"
+                );
+            }
             return Ok(());
         }
         stored.owner_id = Some(owner_id.to_string());
@@ -550,7 +578,10 @@ async fn verify_write_target(ctx: &AppContext, target: crate::safety::WriteTarge
         ctx,
         token,
         &api_source_tiles::ListSourceTilesQuery {
-            limit: Some(1),
+            // A single page of up to 100 rows: large enough to notice a
+            // target serving tiles under more than one owner, small enough
+            // to keep the pre-write probe cheap.
+            limit: Some(100),
             ..Default::default()
         },
     )
@@ -1381,6 +1412,63 @@ mod tests {
             .confirm_write_owner([Uuid::new_v4(), Uuid::new_v4()])
             .expect_err("multiple owners must fail closed");
         assert!(err.to_string().contains("distinct owners"), "{err}");
+    }
+
+    #[test]
+    fn owner_pin_store_conflict_fails_closed() {
+        // A pin already committed in the store must be compared against the
+        // fresh observation even when this context's snapshot predates it.
+        let dir = std::env::temp_dir().join(format!("tastile-owner-pin-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let credential_path = dir.join("credential.json");
+        let api_url = "http://127.0.0.1:39999";
+        let pinned = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        std::fs::write(
+            &credential_path,
+            serde_json::json!({
+                "api_base_url": api_url,
+                "bearer": "test-only-token",
+                "expires_at": null,
+                "subject": null,
+                "owner_id": pinned.to_string()
+            })
+            .to_string(),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&credential_path, std::fs::Permissions::from_mode(0o600))
+                .unwrap();
+        }
+        // SAFETY: test-only env mutation; no other unit test in this binary
+        // reads TASTILE_CREDENTIAL_FILE concurrently.
+        unsafe { std::env::set_var(CREDENTIAL_FILE_ENV, &credential_path) };
+
+        let mut config = Config::default();
+        config.api_url = api_url.to_string();
+        let api = ApiClient::new(ApiConfig::new(&config.api_url).unwrap()).unwrap();
+        let ctx = AppContext {
+            api,
+            config,
+            token: Some(BearerToken::new("test-token")),
+            subject: None,
+            credential_api_base_url: Some(api_url.to_string()),
+            credential_expires_at: None,
+            // The in-memory snapshot predates the persisted pin.
+            credential_owner_id: None,
+        };
+
+        let err = ctx
+            .confirm_write_owner([other])
+            .expect_err("a store pin conflicting with the observation must fail closed");
+        assert!(err.to_string().contains("pinned to owner"), "{err}");
+        ctx.confirm_write_owner([pinned])
+            .expect("an observation matching the store pin must pass");
+
+        unsafe { std::env::remove_var(CREDENTIAL_FILE_ENV) };
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

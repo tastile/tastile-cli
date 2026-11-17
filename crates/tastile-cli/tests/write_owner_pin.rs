@@ -245,26 +245,34 @@ async fn mutation_pins_owner_and_refuses_a_different_owner() {
     );
 
     // Phase 2: the same credential against a target reporting owner B is
-    // refused before any mutation request leaves the process.
+    // refused before any mutation request leaves the process. The timeout
+    // keeps a regression from hanging the test instead of failing it.
     let api_url_retry = api_url.clone();
     let credential_path_retry = credential_path.clone();
-    let phase2 = tokio::task::spawn_blocking(move || {
-        run_cli(
-            &[
-                "source-tiles",
-                "create",
-                "--title",
-                "owner-pin-e2e-2",
-                "--once",
-                "2026-12-02T09:00:00Z",
-            ],
-            &api_url_retry,
-            &credential_path_retry,
-        )
-    })
+    let phase2 = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        tokio::task::spawn_blocking(move || {
+            run_cli(
+                &[
+                    "source-tiles",
+                    "create",
+                    "--title",
+                    "owner-pin-e2e-2",
+                    "--once",
+                    "2026-12-02T09:00:00Z",
+                ],
+                &api_url_retry,
+                &credential_path_retry,
+            )
+        }),
+    )
     .await
+    .expect("phase-2 CLI timed out")
     .expect("join phase-2 CLI");
-    api.await.expect("join mock API");
+    tokio::time::timeout(std::time::Duration::from_secs(30), api)
+        .await
+        .expect("mock API timed out")
+        .expect("join mock API");
 
     assert!(
         !phase2.status.success(),
