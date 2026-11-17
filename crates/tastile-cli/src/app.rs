@@ -35,6 +35,7 @@ pub struct AppContext {
     pub subject: Option<String>,
     credential_api_base_url: Option<String>,
     credential_expires_at: Option<DateTime<Utc>>,
+    credential_owner_id: Option<String>,
 }
 
 /// Proof that the configured target and credential passed write preflight.
@@ -56,15 +57,17 @@ impl AppContext {
         let loaded = store
             .load(tastile_auth::DEFAULT_SERVICE, tastile_auth::DEFAULT_USER)
             .context("credential store error")?;
-        let (token, subject, credential_api_base_url, credential_expires_at) = match loaded {
-            Some(stored) => (
-                Some(BearerToken::new(stored.bearer)),
-                stored.subject,
-                Some(stored.api_base_url),
-                stored.expires_at,
-            ),
-            None => (None, None, None, None),
-        };
+        let (token, subject, credential_api_base_url, credential_expires_at, credential_owner_id) =
+            match loaded {
+                Some(stored) => (
+                    Some(BearerToken::new(stored.bearer)),
+                    stored.subject,
+                    Some(stored.api_base_url),
+                    stored.expires_at,
+                    stored.owner_id,
+                ),
+                None => (None, None, None, None, None),
+            };
         Ok(Self {
             api,
             config: cfg,
@@ -72,6 +75,7 @@ impl AppContext {
             subject,
             credential_api_base_url,
             credential_expires_at,
+            credential_owner_id,
         })
     }
 
@@ -110,6 +114,67 @@ impl AppContext {
             bail!("the stored API credential has expired; run `tastile auth login`");
         }
         Ok(token)
+    }
+
+    /// Fail closed when the owner scope observed through the target does
+    /// not match the owner pinned on the stored credential.
+    ///
+    /// The pinned OpenAPI contract has no `whoami` operation, so the owner
+    /// is learned from read-model rows (`SourceTileRead.owner_id`) instead
+    /// of a dedicated identity endpoint. The first non-empty observation
+    /// pins the owner into the credential store; later observations must
+    /// match. An empty result set cannot identify the owner and is allowed
+    /// — the pin is established by the first read that returns rows (the
+    /// guard probe or a post-write read-back).
+    pub fn confirm_write_owner(&self, observed: impl IntoIterator<Item = Uuid>) -> Result<()> {
+        let observed: std::collections::BTreeSet<String> =
+            observed.into_iter().map(|id| id.to_string()).collect();
+        if observed.len() > 1 {
+            bail!(
+                "the write target returned rows from {} distinct owners; \
+                 refusing to write because the credential scope is ambiguous",
+                observed.len()
+            );
+        }
+        let Some(owner) = observed.iter().next() else {
+            return Ok(());
+        };
+        if let Some(pinned) = self.credential_owner_id.as_deref() {
+            if pinned != owner.as_str() {
+                bail!(
+                    "the stored credential is pinned to owner {pinned} but the write target \
+                     reports owner {owner}; refusing to write. Run `tastile auth login` \
+                     for the intended account"
+                );
+            }
+            return Ok(());
+        }
+        self.persist_owner_pin(
+            Uuid::parse_str(owner).map_err(|e| {
+                anyhow!("write target reported a malformed owner id `{owner}`: {e}")
+            })?,
+        )
+    }
+
+    /// Record the observed Core owner id on the stored credential so later
+    /// processes can detect a token/account mismatch on the same API base.
+    fn persist_owner_pin(&self, owner_id: Uuid) -> Result<()> {
+        let store = credential_store(&self.config)?;
+        let mut stored = store
+            .load(tastile_auth::DEFAULT_SERVICE, tastile_auth::DEFAULT_USER)
+            .context("credential store error")?
+            .ok_or_else(|| anyhow!("no stored API credential; run `tastile auth login`"))?;
+        if stored.owner_id.is_some() {
+            return Ok(());
+        }
+        stored.owner_id = Some(owner_id.to_string());
+        store
+            .save(
+                tastile_auth::DEFAULT_SERVICE,
+                tastile_auth::DEFAULT_USER,
+                &stored,
+            )
+            .context("could not persist the observed owner id on the credential")
     }
 }
 
@@ -491,7 +556,7 @@ async fn verify_write_target(ctx: &AppContext, target: crate::safety::WriteTarge
     )
     .await;
     match probe {
-        Ok(_) => Ok(()),
+        Ok(page) => ctx.confirm_write_owner(page.items.iter().map(|row| row.owner_id)),
         Err(ApiError::Http { status, .. }) if status == 401 || status == 403 => Err(anyhow!(
             "the write target {} rejected the stored credential (HTTP {status}); refusing to write",
             target.describe()
@@ -882,22 +947,42 @@ pub struct SourceTileState {
     pub revision: i64,
     /// Numeric lifecycle: 0 ACTIVE .. 3 CANCELLED.
     pub source_state: i32,
+    pub owner_id: Uuid,
     pub placements_total: usize,
     pub placements_open: usize,
 }
 
 /// Read the source tile and its placements back from the server.
+///
+/// Post-write read-backs also pin the credential's owner identity: the
+/// detail read always carries `owner_id`, so a mutation confirms the
+/// account scope even on a target whose tile list is still empty.
 pub async fn read_back(ctx: &AppContext, id: Uuid) -> Result<SourceTileState> {
     let token = ctx.require_token()?;
     let detail = api_source_tiles::get_source_tile(ctx, token, id)
         .await
         .context("get_source_tile failed")?;
+    ctx.confirm_write_owner([detail.source.owner_id])?;
     Ok(SourceTileState {
         revision: detail.source.revision,
         source_state: detail.source.source_state,
+        owner_id: detail.source.owner_id,
         placements_total: detail.placements.len(),
         placements_open: detail.placements.iter().filter(|p| !p.closed).count(),
     })
+}
+
+/// Confirm the credential's owner pin from a source tile detail read.
+///
+/// `create` needs this: its `CommandResponse` carries ids but no
+/// `owner_id`, so the pin is taken from the detail read of the created
+/// source instead of the write response itself.
+pub async fn confirm_owner_from_source_tile(ctx: &AppContext, id: Uuid) -> Result<()> {
+    let token = ctx.require_token()?;
+    let detail = api_source_tiles::get_source_tile(ctx, token, id)
+        .await
+        .context("get_source_tile failed")?;
+    ctx.confirm_write_owner([detail.source.owner_id])
 }
 
 // ---------------------------------------------------------------------------
@@ -1086,6 +1171,7 @@ mod tests {
             subject: None,
             credential_api_base_url: Some(api_url),
             credential_expires_at: None,
+            credential_owner_id: None,
         };
         (ctx, WritePermit { _private: () }, request_line)
     }
@@ -1254,6 +1340,68 @@ mod tests {
     }
 
     #[test]
+    fn owner_pin_rejects_a_different_observed_owner() {
+        let mut config = Config::default();
+        config.api_url = "https://api.example.test".to_string();
+        let api = ApiClient::new(ApiConfig::new(&config.api_url).unwrap()).unwrap();
+        let pinned = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let ctx = AppContext {
+            api,
+            config,
+            token: Some(BearerToken::new("test-token")),
+            subject: None,
+            credential_api_base_url: Some("https://api.example.test".to_string()),
+            credential_expires_at: None,
+            credential_owner_id: Some(pinned.to_string()),
+        };
+        let err = ctx
+            .confirm_write_owner([other])
+            .expect_err("a different owner must fail closed");
+        assert!(err.to_string().contains("pinned to owner"), "{err}");
+        ctx.confirm_write_owner([pinned, pinned])
+            .expect("the pinned owner must pass");
+    }
+
+    #[test]
+    fn owner_pin_rejects_ambiguous_multi_owner_scope() {
+        let mut config = Config::default();
+        config.api_url = "https://api.example.test".to_string();
+        let api = ApiClient::new(ApiConfig::new(&config.api_url).unwrap()).unwrap();
+        let ctx = AppContext {
+            api,
+            config,
+            token: Some(BearerToken::new("test-token")),
+            subject: None,
+            credential_api_base_url: Some("https://api.example.test".to_string()),
+            credential_expires_at: None,
+            credential_owner_id: None,
+        };
+        let err = ctx
+            .confirm_write_owner([Uuid::new_v4(), Uuid::new_v4()])
+            .expect_err("multiple owners must fail closed");
+        assert!(err.to_string().contains("distinct owners"), "{err}");
+    }
+
+    #[test]
+    fn owner_pin_allows_an_empty_observation() {
+        let mut config = Config::default();
+        config.api_url = "https://api.example.test".to_string();
+        let api = ApiClient::new(ApiConfig::new(&config.api_url).unwrap()).unwrap();
+        let ctx = AppContext {
+            api,
+            config,
+            token: Some(BearerToken::new("test-token")),
+            subject: None,
+            credential_api_base_url: Some("https://api.example.test".to_string()),
+            credential_expires_at: None,
+            credential_owner_id: None,
+        };
+        ctx.confirm_write_owner(std::iter::empty())
+            .expect("an empty read cannot identify an owner and must not block");
+    }
+
+    #[test]
     fn read_token_is_not_sent_to_a_different_api_base() {
         let mut config = Config::default();
         config.api_url = "https://api.example.test".to_string();
@@ -1265,6 +1413,7 @@ mod tests {
             subject: None,
             credential_api_base_url: Some("https://other.example.test".to_string()),
             credential_expires_at: None,
+            credential_owner_id: None,
         };
         assert!(
             ctx.require_token()
@@ -1329,6 +1478,7 @@ mod tests {
             subject: None,
             credential_api_base_url: Some(api_url),
             credential_expires_at: None,
+            credential_owner_id: None,
         };
 
         let tiles = today(&ctx).await.unwrap();

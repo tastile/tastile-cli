@@ -134,6 +134,9 @@ async fn status(cfg: Config) -> Result<ExitCode> {
             if let Some(sub) = token.subject {
                 println!("  Subject:   {sub}");
             }
+            if let Some(owner) = token.owner_id.as_deref() {
+                println!("  Owner pin: {owner}");
+            }
             if let Some(exp) = token.expires_at {
                 println!("  Expires:   {exp}");
                 if exp < Utc::now() {

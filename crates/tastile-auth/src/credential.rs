@@ -36,6 +36,11 @@ pub struct StoredToken {
     pub bearer: String,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub subject: Option<String>,
+    /// Core owner id observed through an authenticated read. `None` until
+    /// the first guarded write/read pins it; once set, writes fail closed
+    /// when the target reports a different owner.
+    #[serde(default)]
+    pub owner_id: Option<String>,
 }
 
 impl fmt::Debug for StoredToken {
@@ -45,6 +50,7 @@ impl fmt::Debug for StoredToken {
             .field("bearer", &"[REDACTED]")
             .field("expires_at", &self.expires_at)
             .field("subject", &self.subject)
+            .field("owner_id", &self.owner_id)
             .finish()
     }
 }
@@ -63,7 +69,14 @@ impl StoredToken {
             bearer: bearer.into(),
             expires_at,
             subject,
+            owner_id: None,
         }
+    }
+
+    /// Return a copy of this token with the observed Core owner id pinned.
+    pub fn with_owner_id(mut self, owner_id: impl Into<String>) -> Self {
+        self.owner_id = Some(owner_id.into());
+        self
     }
 }
 
