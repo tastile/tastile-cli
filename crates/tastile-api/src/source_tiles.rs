@@ -189,6 +189,22 @@ pub struct SourceOccurrenceRead(pub serde_json::Value);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelationDefinitionRead(pub serde_json::Value);
 
+/// Spec: `components.schemas.SourceTileDefinitionSchema` (v1/14 §17) — the
+/// write-shaped definition read back from normalized persisted state for
+/// merge-or-replace editing. `schedule` stays on `SourceTileRead.schedule`,
+/// `horizon` is never persisted, and `source_client_local_id` is always
+/// null on read-back. Relation refs are normalized to `existing`; clients
+/// re-author `local` refs explicitly when needed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceTileDefinition {
+    pub tile: ScheduleTileDefinition,
+    pub plan: SchedulePlanDefinition,
+    pub flows: Vec<FlowDefinition>,
+    pub relations: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub source_client_local_id: Option<Uuid>,
+}
+
 /// Spec: `components.schemas.SourceTileDetailRead`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceTileDetailRead {
@@ -196,6 +212,9 @@ pub struct SourceTileDetailRead {
     pub relations: Vec<RelationDefinitionRead>,
     pub occurrences: Vec<SourceOccurrenceRead>,
     pub placements: Vec<PlacementTileRead>,
+    /// Optional for tolerance of pre-v3.2.0 servers; `update` requires it.
+    #[serde(default)]
+    pub definition: Option<SourceTileDefinition>,
 }
 
 /// Canonical cursor page from Core. The untagged decoder also accepts the
@@ -265,6 +284,8 @@ struct SourceTileDetailPage {
     relations: Vec<RelationDefinitionRead>,
     occurrences: ListResponse<SourceOccurrenceRead>,
     placements: ListResponse<PlacementTileRead>,
+    #[serde(default)]
+    definition: Option<SourceTileDefinition>,
 }
 
 // ---------------------------------------------------------------------------
@@ -376,7 +397,11 @@ pub async fn get_source_tile(
             relations: page.relations.clone(),
             occurrences: Vec::new(),
             placements: Vec::new(),
+            definition: page.definition.clone(),
         });
+        if detail.definition.is_none() {
+            detail.definition = page.definition.clone();
+        }
 
         if !occurrence_done {
             if page.occurrences.legacy_array

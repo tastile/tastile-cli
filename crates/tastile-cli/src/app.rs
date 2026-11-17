@@ -173,11 +173,21 @@ impl AppContext {
     /// observed owner onto a credential minted for a different target.
     fn persist_owner_pin(&self, owner_id: Uuid) -> Result<()> {
         let store = credential_store(&self.config)?;
+        Self::persist_owner_pin_with(store.as_ref(), &self.config.api_url, owner_id)
+    }
+
+    /// Store-injectable core of [`Self::persist_owner_pin`]; tests pass a
+    /// file-backed store directly instead of mutating process env.
+    fn persist_owner_pin_with(
+        store: &dyn CredentialStore,
+        api_url: &str,
+        owner_id: Uuid,
+    ) -> Result<()> {
         let mut stored = store
             .load(tastile_auth::DEFAULT_SERVICE, tastile_auth::DEFAULT_USER)
             .context("credential store error")?
             .ok_or_else(|| anyhow!("no stored API credential; run `tastile auth login`"))?;
-        if !crate::safety::api_bases_match(&self.config.api_url, &stored.api_base_url) {
+        if !crate::safety::api_bases_match(api_url, &stored.api_base_url) {
             bail!(
                 "the stored credential changed while pinning the owner id; \
                  refusing to write. Retry the command"
@@ -489,10 +499,14 @@ pub async fn create_source_tile_draft(
         .context("create_source_tile failed")
 }
 
-pub(crate) async fn update_source_tile_draft_with_permit(
+/// CLI-level wrapper for `update_source_tile`. The payload must already be
+/// merged against the server's definition read-back (see
+/// [`merge_source_tile_update`]); this function only attaches CAS revision
+/// and sends it.
+pub(crate) async fn update_source_tile_with_permit(
     ctx: &AppContext,
     id: Uuid,
-    draft: &CreateSourceTileDraft,
+    payload: UpdateSourceTilePayload,
     expected_revision: Option<i64>,
     _permit: &WritePermit,
 ) -> Result<CommandResponse> {
@@ -506,16 +520,6 @@ pub(crate) async fn update_source_tile_draft_with_permit(
                 .source
                 .revision
         }
-    };
-    let create_payload = build_create_request(draft)?.payload;
-    let payload = UpdateSourceTilePayload {
-        tile: create_payload.tile,
-        plan: create_payload.plan,
-        flows: create_payload.flows,
-        schedule: create_payload.schedule,
-        horizon: create_payload.horizon,
-        relations: create_payload.relations,
-        source_client_local_id: create_payload.source_client_local_id,
     };
     let req = UpdateSourceTileRequest::new(payload).with_expected_revision(revision);
     api_source_tiles::update_source_tile(ctx, token, id, &req)
@@ -704,228 +708,364 @@ pub struct FieldDiff {
     pub proposed: String,
 }
 
-/// Compare fields exposed by the source-tile read model with the proposed
-/// full-replacement draft. The API read model does not expose plan details,
-/// flows, horizon, request-shaped relations, or `source_client_local_id`, so
-/// those fields cannot be diffed here and are called out separately by the
-/// command.
-pub fn diff_source_tile(draft: &CreateSourceTileDraft, current: &SourceTileRead) -> Vec<FieldDiff> {
-    let mut diffs: Vec<FieldDiff> = Vec::new();
-    let mut push = |field: &str, current_value: String, proposed_value: String| {
-        if current_value != proposed_value {
-            diffs.push(FieldDiff {
-                field: field.to_string(),
-                current: current_value,
-                proposed: proposed_value,
-            });
+// ---------------------------------------------------------------------------
+// Source-tile update merge (v1/14 §17 definition read-back).
+//
+// `PUT /v1/source-tiles/{id}` is a full replacement on the wire, so the CLI
+// rebuilds the complete payload from the server's `definition` read-back and
+// applies the user's patch on top. Omitted patch fields are preserved; an
+// explicit `null` clears nullable fields; `[]` clears collections. `horizon`
+// is a materialization input Core never persists, so every update must
+// supply it explicitly.
+// ---------------------------------------------------------------------------
+
+const UPDATE_TILE_FIELDS: &[&str] = &["title", "description", "color", "icon", "external_id"];
+const UPDATE_PLAN_FIELDS: &[&str] = &[
+    "role",
+    "completion",
+    "planning",
+    "metrics",
+    "decisions",
+    "references",
+];
+const UPDATE_SCHEDULE_OBJECT_FIELDS: &[&str] = &["generation", "window", "split_policy"];
+const UPDATE_PATCH_FIELDS: &[&str] = &[
+    "title",
+    "description",
+    "color",
+    "icon",
+    "external_id",
+    "plan",
+    "plan_role",
+    "flows",
+    "generation",
+    "window",
+    "split_policy",
+    "priority",
+    "required_duration_ms",
+    "relations",
+    "source_client_local_id",
+    "horizon",
+    "horizon_start",
+    "horizon_end",
+];
+
+fn patch_field<'a>(
+    patch: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<&'a serde_json::Value>> {
+    Ok(patch.get(key))
+}
+
+/// Merge an update patch into a complete `UpdateSourceTilePayload` using the
+/// detail read's `definition` (v1/14 §17) plus `source.schedule` as the
+/// preservation base.
+pub fn merge_source_tile_update(
+    detail: &SourceTileDetailRead,
+    patch: &serde_json::Value,
+) -> Result<UpdateSourceTilePayload> {
+    let definition = detail.definition.as_ref().ok_or_else(|| {
+        anyhow!(
+            "the server did not return `definition` read-back (requires Core              OpenAPI v3.2.0 / v1/14 §17); refusing to merge without the              persisted definition"
+        )
+    })?;
+    let patch_obj = patch
+        .as_object()
+        .ok_or_else(|| anyhow!("update patch must be a JSON object"))?;
+    for key in patch_obj.keys() {
+        if !UPDATE_PATCH_FIELDS.contains(&key.as_str()) {
+            bail!(
+                "unknown update field `{key}`; accepted fields: {}",
+                UPDATE_PATCH_FIELDS.join(", ")
+            );
+        }
+    }
+
+    // Tile: absent keeps the read-back value; null clears the nullable
+    // metadata fields; `title` is required non-null.
+    let mut tile = serde_json::to_value(&definition.tile)?;
+    let tile_obj = tile
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("internal: tile definition did not serialize to an object"))?;
+    for key in UPDATE_TILE_FIELDS {
+        let Some(value) = patch_field(patch_obj, key)? else {
+            continue;
+        };
+        if *key == "title" {
+            if !value.is_string() {
+                bail!("`title` must be a string");
+            }
+        } else if !(value.is_string() || value.is_null()) {
+            bail!("`{key}` must be a string or null");
+        }
+        tile_obj.insert((*key).to_string(), value.clone());
+    }
+
+    // Plan: `plan` is an object whose subfields merge individually, so a
+    // patch can change only `metrics` without restating `completion`.
+    let mut plan = serde_json::to_value(&definition.plan)?;
+    let plan_obj = plan
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("internal: plan definition did not serialize to an object"))?;
+    if let Some(plan_patch) = patch_obj.get("plan") {
+        let plan_patch_obj = plan_patch
+            .as_object()
+            .ok_or_else(|| anyhow!("`plan` must be a JSON object"))?;
+        for key in plan_patch_obj.keys() {
+            if !UPDATE_PLAN_FIELDS.contains(&key.as_str()) {
+                bail!(
+                    "unknown `plan` field `{key}`; accepted fields: {}",
+                    UPDATE_PLAN_FIELDS.join(", ")
+                );
+            }
+        }
+        for key in UPDATE_PLAN_FIELDS {
+            let Some(value) = plan_patch_obj.get(*key) else {
+                continue;
+            };
+            match *key {
+                "role" => {
+                    if value.as_i64().is_none() {
+                        bail!("`plan.role` must be an integer");
+                    }
+                }
+                "completion" | "planning" => {
+                    if !value.is_object() {
+                        bail!("`plan.{key}` must be a JSON object");
+                    }
+                }
+                _ => {
+                    if !value.is_array() {
+                        bail!("`plan.{key}` must be an array");
+                    }
+                }
+            }
+            plan_obj.insert((*key).to_string(), value.clone());
+        }
+    }
+    if let Some(role_value) = patch_obj.get("plan_role") {
+        let role = role_value
+            .as_i64()
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| anyhow!("`plan_role` must be an int32"))?;
+        if let Some(existing) = plan_obj.get("role").and_then(|v| v.as_i64()) {
+            if existing != i64::from(role) {
+                bail!(
+                    "`plan_role` ({role}) disagrees with `plan.role` ({existing}); make them match or omit one"
+                );
+            }
+        }
+        plan_obj.insert("role".to_string(), serde_json::json!(role));
+    }
+
+    // Schedule: read shape and write shape share SourceScheduleDefinitionSchema,
+    // so the read-back value round-trips unchanged unless the patch overrides
+    // individual subfields.
+    let mut schedule = serde_json::to_value(&detail.source.schedule)?;
+    let schedule_obj = schedule
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("internal: schedule did not serialize to an object"))?;
+    for key in UPDATE_SCHEDULE_OBJECT_FIELDS {
+        if let Some(value) = patch_obj.get(*key) {
+            if !value.is_object() {
+                bail!("`{key}` must be a JSON object");
+            }
+            schedule_obj.insert((*key).to_string(), value.clone());
+        }
+    }
+    for key in ["priority", "required_duration_ms"] {
+        if let Some(value) = patch_obj.get(key) {
+            if value.as_i64().is_none() {
+                bail!("`{key}` must be an integer");
+            }
+            schedule_obj.insert((*key).to_string(), value.clone());
+        }
+    }
+
+    let flows = match patch_obj.get("flows") {
+        Some(value) => {
+            if !value.is_array() {
+                bail!("`flows` must be an array");
+            }
+            value.clone()
+        }
+        None => serde_json::to_value(&definition.flows)?,
+    };
+
+    // Relations: absent preserves the read-back payload refs (already
+    // normalized to `existing` per v1/14 §17-2); explicit null omits the
+    // field; an array replaces the complete set.
+    let relations: Option<Vec<serde_json::Value>> = match patch_obj.get("relations") {
+        Some(value) if value.is_null() => None,
+        Some(value) => Some(
+            serde_json::from_value(value.clone())
+                .context("`relations` must be an array of relation payloads")?,
+        ),
+        None => Some(definition.relations.clone()),
+    };
+
+    // `source_client_local_id` is never persisted, so read-back is always
+    // null; absent keeps null, an explicit UUID re-assigns it.
+    let source_client_local_id: Option<Uuid> = match patch_obj.get("source_client_local_id") {
+        Some(value) if value.is_null() => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .and_then(|raw| Uuid::parse_str(raw).ok())
+                .ok_or_else(|| anyhow!("`source_client_local_id` must be a UUID string or null"))?,
+        ),
+        None => definition.source_client_local_id,
+    };
+
+    let horizon: Span = if let Some(horizon) = patch_obj.get("horizon") {
+        serde_json::from_value(horizon.clone())
+            .context("`horizon` must be an object with RFC3339 `start` and `end`")?
+    } else {
+        match (patch_obj.get("horizon_start"), patch_obj.get("horizon_end")) {
+            (Some(start), Some(end)) => Span {
+                start: parse_rfc3339_field(start, "horizon_start")?,
+                end: parse_rfc3339_field(end, "horizon_end")?,
+            },
+            _ => bail!(
+                "`horizon` is a materialization input Core never persists; supply                  `horizon` as an object with `start`/`end`, or `horizon_start` + `horizon_end`"
+            ),
         }
     };
 
-    push("title", current.title.clone(), draft.title.clone());
-    push(
-        "description",
-        optional(current.description.as_deref()),
-        optional(draft.description.as_deref()),
-    );
-    push(
-        "color",
-        optional(current.color.as_deref()),
-        optional(draft.color.as_deref()),
-    );
-    push(
-        "icon",
-        optional(current.icon.as_deref()),
-        optional(draft.icon.as_deref()),
-    );
-    push(
-        "external_id",
-        optional(current.external_id.as_deref()),
-        optional(draft.external_id.as_deref()),
-    );
-    push(
-        "plan_role",
-        current.plan_role.to_string(),
-        draft.plan_role.to_string(),
-    );
-    push(
-        "schedule.required_duration_ms",
-        current.schedule.required_duration_ms.to_string(),
-        draft.required_duration_ms.to_string(),
-    );
-    push(
-        "schedule.priority",
-        current.schedule.priority.to_string(),
-        draft.priority.to_string(),
-    );
+    let tile: ScheduleTileDefinition =
+        serde_json::from_value(tile).context("merged `tile` failed validation")?;
+    let plan: SchedulePlanDefinition =
+        serde_json::from_value(plan).context("merged `plan` failed validation")?;
+    let schedule: CreateSourceScheduleDefinition =
+        serde_json::from_value(schedule).context("merged `schedule` failed validation")?;
+    let flows: Vec<serde_json::Value> =
+        serde_json::from_value(flows).context("merged `flows` failed validation")?;
 
-    if let Some(generation) = draft.generation.as_ref() {
-        let current_generation = &current.schedule.generation;
-        push(
-            "schedule.generation.kind",
-            current_generation.kind.to_string(),
-            json_number(generation, "kind"),
-        );
-        push(
-            "schedule.generation.at",
-            optional(current_generation.at.map(|v| v.to_rfc3339()).as_deref()),
-            json_string(generation, "at"),
-        );
-        push(
-            "schedule.generation.starts_at",
-            optional(
-                current_generation
-                    .starts_at
-                    .map(|v| v.to_rfc3339())
-                    .as_deref(),
-            ),
-            json_string(generation, "starts_at"),
-        );
-        push(
-            "schedule.generation.interval_ms",
-            optional(
-                current_generation
-                    .interval_ms
-                    .map(|v| v.to_string())
-                    .as_deref(),
-            ),
-            json_number(generation, "interval_ms"),
-        );
-        push(
-            "schedule.generation.ends_at",
-            optional(
-                current_generation
-                    .ends_at
-                    .map(|v| v.to_rfc3339())
-                    .as_deref(),
-            ),
-            json_string(generation, "ends_at"),
-        );
-        push(
-            "schedule.generation.weekday_mask",
-            optional(
-                current_generation
-                    .weekday_mask
-                    .map(|v| v.to_string())
-                    .as_deref(),
-            ),
-            json_number(generation, "weekday_mask"),
-        );
-        push(
-            "schedule.generation.date_range_start",
-            optional(current_generation.date_range_start.as_deref()),
-            json_string(generation, "date_range_start"),
-        );
-        push(
-            "schedule.generation.date_range_end",
-            optional(current_generation.date_range_end.as_deref()),
-            json_string(generation, "date_range_end"),
-        );
-        push(
-            "schedule.generation.offset_min",
-            optional(
-                current_generation
-                    .offset_min
-                    .map(|v| v.to_string())
-                    .as_deref(),
-            ),
-            json_number(generation, "offset_min"),
-        );
-        push(
-            "schedule.generation.excluded_dates",
-            current_generation.excluded_dates.join(","),
-            json_string_array(generation, "excluded_dates"),
-        );
-    }
-    if let Some(window) = draft.window.as_ref() {
-        push(
-            "schedule.window.start_offset_ms",
-            current.schedule.window.start_offset_ms.to_string(),
-            json_number(window, "start_offset_ms"),
-        );
-        push(
-            "schedule.window.end_offset_ms",
-            current.schedule.window.end_offset_ms.to_string(),
-            json_number(window, "end_offset_ms"),
-        );
-    }
-    if let Some(split_policy) = draft.split_policy.as_ref() {
-        push(
-            "schedule.split_policy.kind",
-            current.schedule.split_policy.kind.to_string(),
-            json_number(split_policy, "kind"),
-        );
-        push(
-            "schedule.split_policy.min_segment_ms",
-            optional(
-                current
-                    .schedule
-                    .split_policy
-                    .min_segment_ms
-                    .map(|v| v.to_string())
-                    .as_deref(),
-            ),
-            json_number(split_policy, "min_segment_ms"),
-        );
-        push(
-            "schedule.split_policy.max_segment_ms",
-            optional(
-                current
-                    .schedule
-                    .split_policy
-                    .max_segment_ms
-                    .map(|v| v.to_string())
-                    .as_deref(),
-            ),
-            json_number(split_policy, "max_segment_ms"),
-        );
-        push(
-            "schedule.split_policy.max_segments",
-            optional(
-                current
-                    .schedule
-                    .split_policy
-                    .max_segments
-                    .map(|v| v.to_string())
-                    .as_deref(),
-            ),
-            json_number(split_policy, "max_segments"),
+    Ok(UpdateSourceTilePayload {
+        tile,
+        plan,
+        flows,
+        schedule,
+        horizon,
+        relations,
+        source_client_local_id,
+    })
+}
+
+fn parse_rfc3339_field(value: &serde_json::Value, field: &str) -> Result<DateTime<Utc>> {
+    let raw = value
+        .as_str()
+        .ok_or_else(|| anyhow!("`{field}` must be an RFC3339 timestamp string"))?;
+    DateTime::parse_from_rfc3339(raw.trim())
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|_| anyhow!("invalid `{field}` `{raw}`; expected RFC 3339"))
+}
+
+/// The payload Core effectively has stored, rebuilt from `definition` +
+/// `source.schedule`. `horizon` is excluded because Core never persists it.
+fn stored_update_payload_json(detail: &SourceTileDetailRead) -> Result<serde_json::Value> {
+    let definition = detail
+        .definition
+        .as_ref()
+        .ok_or_else(|| anyhow!("the server did not return `definition` read-back; cannot diff"))?;
+    Ok(serde_json::json!({
+        "tile": definition.tile,
+        "plan": definition.plan,
+        "schedule": detail.source.schedule,
+        "flows": definition.flows,
+        "relations": definition.relations,
+        "source_client_local_id": definition.source_client_local_id,
+    }))
+}
+
+/// Field-level diff between the stored definition and the merged update
+/// payload. Unlike the old read-model diff this covers plan, flows,
+/// relations, and schedule because both sides are now write-shaped.
+pub fn diff_source_tile_update(
+    detail: &SourceTileDetailRead,
+    merged: &UpdateSourceTilePayload,
+) -> Vec<FieldDiff> {
+    let mut diffs = Vec::new();
+    let Ok(stored) = stored_update_payload_json(detail) else {
+        return diffs;
+    };
+    let Ok(proposed) = serde_json::to_value(merged) else {
+        return diffs;
+    };
+    for key in [
+        "tile",
+        "plan",
+        "schedule",
+        "flows",
+        "relations",
+        "source_client_local_id",
+    ] {
+        diff_json_value(
+            stored.get(key).unwrap_or(&serde_json::Value::Null),
+            proposed.get(key).unwrap_or(&serde_json::Value::Null),
+            key,
+            &mut diffs,
+            0,
         );
     }
     diffs
 }
 
-fn json_number(value: &serde_json::Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(serde_json::Value::as_i64)
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "(unset)".to_string())
+const MAX_UPDATE_DIFF_FIELDS: usize = 200;
+const MAX_UPDATE_DIFF_DEPTH: usize = 8;
+
+fn diff_json_value(
+    current: &serde_json::Value,
+    proposed: &serde_json::Value,
+    path: &str,
+    out: &mut Vec<FieldDiff>,
+    depth: usize,
+) {
+    if current == proposed || out.len() >= MAX_UPDATE_DIFF_FIELDS {
+        return;
+    }
+    if depth < MAX_UPDATE_DIFF_DEPTH {
+        if let (Some(current_obj), Some(proposed_obj)) = (current.as_object(), proposed.as_object())
+        {
+            let mut keys: Vec<&String> = current_obj
+                .keys()
+                .chain(proposed_obj.keys())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            keys.sort();
+            for key in keys {
+                diff_json_value(
+                    current_obj.get(key).unwrap_or(&serde_json::Value::Null),
+                    proposed_obj.get(key).unwrap_or(&serde_json::Value::Null),
+                    &format!("{path}.{key}"),
+                    out,
+                    depth + 1,
+                );
+            }
+            return;
+        }
+    }
+    out.push(FieldDiff {
+        field: path.to_string(),
+        current: summarize_json(current),
+        proposed: summarize_json(proposed),
+    });
 }
 
-fn json_string(value: &serde_json::Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "(unset)".to_string())
-}
-
-fn json_string_array(value: &serde_json::Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(serde_json::Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str())
-                .collect::<Vec<&str>>()
-                .join(",")
-        })
-        .unwrap_or_default()
-}
-
-fn optional(value: Option<&str>) -> String {
-    value.unwrap_or("(unset)").to_string()
+fn summarize_json(value: &serde_json::Value) -> String {
+    let rendered = match value {
+        serde_json::Value::Array(items) => format!("[{} item(s)]", items.len()),
+        serde_json::Value::Null => "null".to_string(),
+        other => serde_json::to_string(other).unwrap_or_else(|_| other.to_string()),
+    };
+    const MAX: usize = 120;
+    if rendered.chars().count() > MAX {
+        let truncated: String = rendered.chars().take(MAX - 1).collect();
+        format!("{truncated}…")
+    } else {
+        rendered
+    }
 }
 
 /// Placement rows a cancel / reflow would touch.
@@ -1442,32 +1582,14 @@ mod tests {
             std::fs::set_permissions(&credential_path, std::fs::Permissions::from_mode(0o600))
                 .unwrap();
         }
-        // SAFETY: test-only env mutation; no other unit test in this binary
-        // reads TASTILE_CREDENTIAL_FILE concurrently.
-        unsafe { std::env::set_var(CREDENTIAL_FILE_ENV, &credential_path) };
+        let store = tastile_auth::FileCredentialStore::new(&credential_path);
 
-        let mut config = Config::default();
-        config.api_url = api_url.to_string();
-        let api = ApiClient::new(ApiConfig::new(&config.api_url).unwrap()).unwrap();
-        let ctx = AppContext {
-            api,
-            config,
-            token: Some(BearerToken::new("test-token")),
-            subject: None,
-            credential_api_base_url: Some(api_url.to_string()),
-            credential_expires_at: None,
-            // The in-memory snapshot predates the persisted pin.
-            credential_owner_id: None,
-        };
-
-        let err = ctx
-            .confirm_write_owner([other])
+        let err = AppContext::persist_owner_pin_with(&store, api_url, other)
             .expect_err("a store pin conflicting with the observation must fail closed");
         assert!(err.to_string().contains("pinned to owner"), "{err}");
-        ctx.confirm_write_owner([pinned])
+        AppContext::persist_owner_pin_with(&store, api_url, pinned)
             .expect("an observation matching the store pin must pass");
 
-        unsafe { std::env::remove_var(CREDENTIAL_FILE_ENV) };
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1598,5 +1720,143 @@ mod tests {
             target_work_min: None,
             temporal: None,
         }
+    }
+    fn update_test_detail() -> SourceTileDetailRead {
+        serde_json::from_value(serde_json::json!({
+            "source": {
+                "source_tile_id": Uuid::new_v4(),
+                "plan_id": Uuid::new_v4(),
+                "owner_id": Uuid::new_v4(),
+                "revision": 7,
+                "source_state": 0,
+                "title": "stored title",
+                "plan_role": 0,
+                "schedule": {
+                    "required_duration_ms": 1800000,
+                    "priority": 3,
+                    "generation": {"kind": 1, "interval_ms": 86400000},
+                    "window": {"start_offset_ms": -3600000, "end_offset_ms": 3600000},
+                    "split_policy": {"kind": 0}
+                },
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z"
+            },
+            "relations": [],
+            "occurrences": [],
+            "placements": [],
+            "definition": {
+                "tile": {"title": "stored title", "description": "keep me"},
+                "plan": {
+                    "role": 0,
+                    "completion": {"root": {"All": []}, "tasks": [{"id": "t1"}], "time_requirements": []},
+                    "planning": {"nesting_rules": [{"a": 1}], "placement_rules": []},
+                    "metrics": [{"m": 1}],
+                    "decisions": [{"d": 1}],
+                    "references": [{"r": 1}]
+                },
+                "flows": [{"flow": 1}],
+                "relations": [{"subject": {"kind": "existing", "source_tile_id": Uuid::new_v4()}}],
+                "source_client_local_id": null
+            }
+        }))
+        .expect("detail")
+    }
+
+    fn horizon_patch() -> serde_json::Value {
+        serde_json::json!({
+            "horizon": {"start": "2026-11-20T09:00:00Z", "end": "2026-11-20T10:00:00Z"}
+        })
+    }
+
+    #[test]
+    fn update_merge_preserves_unmentioned_fields() {
+        let detail = update_test_detail();
+        let mut patch = horizon_patch();
+        patch["plan"]["metrics"] = serde_json::json!([{"m": 2}]);
+        let merged = merge_source_tile_update(&detail, &patch).expect("merge");
+
+        assert_eq!(merged.plan.metrics, vec![serde_json::json!({"m": 2})]);
+        assert_eq!(
+            merged.plan.completion["tasks"],
+            serde_json::json!([{"id": "t1"}])
+        );
+        assert_eq!(
+            merged.plan.planning["nesting_rules"],
+            serde_json::json!([{"a": 1}])
+        );
+        assert_eq!(merged.plan.decisions, vec![serde_json::json!({"d": 1})]);
+        assert_eq!(merged.plan.references, vec![serde_json::json!({"r": 1})]);
+        assert_eq!(merged.flows, vec![serde_json::json!({"flow": 1})]);
+        assert_eq!(merged.relations.as_ref().map(Vec::len), Some(1));
+        assert_eq!(merged.schedule.priority, 3);
+        assert_eq!(merged.tile.description.as_deref(), Some("keep me"));
+        assert_eq!(
+            merged.horizon.start.to_rfc3339(),
+            "2026-11-20T09:00:00+00:00"
+        );
+    }
+
+    #[test]
+    fn update_merge_null_and_empty_clear_semantics() {
+        let detail = update_test_detail();
+        let mut patch = horizon_patch();
+        patch["description"] = serde_json::Value::Null;
+        patch["relations"] = serde_json::Value::Null;
+        patch["flows"] = serde_json::json!([]);
+        let merged = merge_source_tile_update(&detail, &patch).expect("merge");
+
+        assert_eq!(merged.tile.description, None);
+        assert_eq!(merged.relations, None);
+        assert!(merged.flows.is_empty());
+    }
+
+    #[test]
+    fn update_merge_requires_horizon() {
+        let detail = update_test_detail();
+        let patch = serde_json::json!({"title": "new title"});
+        assert!(merge_source_tile_update(&detail, &patch).is_err());
+    }
+
+    #[test]
+    fn update_merge_rejects_unknown_fields() {
+        let detail = update_test_detail();
+        let mut patch = horizon_patch();
+        patch["bogus"] = serde_json::json!(1);
+        assert!(merge_source_tile_update(&detail, &patch).is_err());
+
+        let mut patch = horizon_patch();
+        patch["plan"]["bogus"] = serde_json::json!(1);
+        assert!(merge_source_tile_update(&detail, &patch).is_err());
+    }
+
+    #[test]
+    fn update_merge_rejects_plan_role_conflict() {
+        let detail = update_test_detail();
+        let mut patch = horizon_patch();
+        patch["plan_role"] = serde_json::json!(1);
+        patch["plan"]["role"] = serde_json::json!(0);
+        assert!(merge_source_tile_update(&detail, &patch).is_err());
+    }
+
+    #[test]
+    fn update_diff_covers_plan_and_schedule() {
+        let detail = update_test_detail();
+        let mut patch = horizon_patch();
+        patch["plan"]["metrics"] = serde_json::json!([{"m": 2}]);
+        patch["priority"] = serde_json::json!(9);
+        let merged = merge_source_tile_update(&detail, &patch).expect("merge");
+        let diffs = diff_source_tile_update(&detail, &merged);
+        let fields: Vec<&str> = diffs.iter().map(|d| d.field.as_str()).collect();
+
+        assert!(fields.contains(&"plan.metrics"), "diffs: {fields:?}");
+        assert!(fields.contains(&"schedule.priority"), "diffs: {fields:?}");
+        assert!(
+            !fields.iter().any(|f| f.starts_with("tile.")),
+            "diffs: {fields:?}"
+        );
+        assert!(
+            !fields.iter().any(|f| f.starts_with("flows")),
+            "diffs: {fields:?}"
+        );
     }
 }
