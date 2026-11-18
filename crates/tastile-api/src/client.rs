@@ -142,6 +142,10 @@ impl ApiClient {
         let inner = reqwest::Client::builder()
             .timeout(cfg.request_timeout)
             .user_agent(cfg.user_agent.clone())
+            // Never follow redirects: an authenticated POST (e.g. schedule
+            // publish) must not be bounced by a 3xx to a different host than
+            // the one the caller's write-guard classified.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(ApiError::Transport)?;
         Ok(Self { inner, cfg })

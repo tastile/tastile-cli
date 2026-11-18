@@ -24,7 +24,8 @@ pub async fn run(cfg: Config, args: ScheduleArgs) -> Result<ExitCode> {
             bail!(
                 "`schedule regenerate` has never been implemented and did not send an API request. \
                  Use `tastile schedule publish --from-json PATH` to preview a real payload, \
-                 then add `--apply` to publish to a loopback Core."
+                 then publish with `--apply --idempotency-key <UUID>` (reuse the key shown \
+                 by the preview) and TASTILE_API_URL pointing to a loopback Core."
             )
         }
         ScheduleCommand::Publish {
