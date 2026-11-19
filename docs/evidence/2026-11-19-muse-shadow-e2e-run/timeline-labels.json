@@ -1,0 +1,72 @@
+[
+  {
+    "placement_id": "01a1f46b-da44-7a70-8ce0-bcf134b77c53",
+    "revision": 1,
+    "tile_id": "01a1f46b-da44-7a70-8ce0-bd00f898cf4a",
+    "content": {
+      "title": "muse-e2e-20261119T152750Z label",
+      "description": null
+    },
+    "visual": {
+      "color": null,
+      "icon": null
+    },
+    "role": 1,
+    "span": {
+      "start": "2026-11-19T00:00:00Z",
+      "end": "2026-11-19T00:30:00Z"
+    },
+    "source": {
+      "kind": 4,
+      "detail": "source_kind=4"
+    },
+    "resolution": {
+      "state": 0,
+      "resolved_at": "2026-11-19T00:30:00Z",
+      "resolution_hash": "00000000-0000-0000-0000-000000000000",
+      "violations": []
+    },
+    "inside": null,
+    "occurrence_id": "01a1f46b-d99e-7190-8971-bf56b521a58e",
+    "source_tile_id": "01a1f46b-d99c-7da1-920f-ee56f24ccc50",
+    "split_index": 0,
+    "split_count": 1,
+    "split_group_id": "01a1f46b-d99e-7190-8971-bf56b521a58e",
+    "owner": null
+  },
+  {
+    "placement_id": "01a1f46b-da45-75c0-aa82-1d704e24ccd7",
+    "revision": 1,
+    "tile_id": "01a1f46b-da45-75c0-aa82-1d8e0810fc29",
+    "content": {
+      "title": "muse-e2e-20261119T152750Z label",
+      "description": null
+    },
+    "visual": {
+      "color": null,
+      "icon": null
+    },
+    "role": 1,
+    "span": {
+      "start": "2026-11-20T00:00:00Z",
+      "end": "2026-11-20T00:30:00Z"
+    },
+    "source": {
+      "kind": 4,
+      "detail": "source_kind=4"
+    },
+    "resolution": {
+      "state": 0,
+      "resolved_at": "2026-11-20T00:30:00Z",
+      "resolution_hash": "00000000-0000-0000-0000-000000000000",
+      "violations": []
+    },
+    "inside": null,
+    "occurrence_id": "01a1f46b-d99e-7190-8971-bf6fa4c0f0c9",
+    "source_tile_id": "01a1f46b-d99c-7da1-920f-ee56f24ccc50",
+    "split_index": 0,
+    "split_count": 1,
+    "split_group_id": "01a1f46b-d99e-7190-8971-bf6fa4c0f0c9",
+    "owner": null
+  }
+]
