@@ -4,7 +4,11 @@
 # Exercises the same command surface Muse uses day to day:
 #   create -> placements -> execution lifecycle -> reads -> edge cases
 #   (excluded dates, label-only role, priority contention + reflow
-#   isolation, prompts, cancel).
+#   isolation, prompts, cancel, leftover verification).
+#
+# All scenario dates are derived from the run date (JST schedule-local for
+# date-based assertions, UTC for timeline/reflow windows), so the script
+# is re-runnable on any day.
 #
 # Required environment (all three):
 #   TASTILE_API_URL                  loopback API base, e.g. http://127.0.0.1:31498
@@ -26,9 +30,10 @@ if [[ -z "${BIN}" ]]; then
   if [[ -x "./target/release/tastile" ]]; then
     BIN="./target/release/tastile"
   else
-    BIN="$(command -v tastile)"
+    BIN="$(command -v tastile || true)"
   fi
 fi
+[[ -n "${BIN}" && -x "${BIN}" ]] || { echo "tastile binary not found; set TASTILE_BIN" >&2; exit 2; }
 OUT="${MUSE_E2E_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/muse-e2e.XXXXXX")}"
 mkdir -p "${OUT}"
 RUN="muse-e2e-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -44,6 +49,20 @@ check() { # check <description> <command...>
 }
 json_get() { jq -r "$1" "${OUT}/last.out"; }
 cli() { "${BIN}" "$@"; }
+
+# Date helpers: all scenario dates are derived from the run date so the
+# script stays valid on any day. `add_days` prints YYYY-MM-DD; `dow` prints
+# the ISO weekday (1=Mon..7=Sun) for the given zone.
+add_days() { # <days> <u|jst>
+  if [[ "$2" == "jst" ]]; then
+    TZ=Asia/Tokyo date -v+"$1"d +%F 2>/dev/null || TZ=Asia/Tokyo date -d "+$1 days" +%F
+  else
+    date -u -v+"$1"d +%F 2>/dev/null || date -u -d "+$1 days" +%F
+  fi
+}
+dow() { # <u|jst>
+  if [[ "$1" == "jst" ]]; then TZ=Asia/Tokyo date +%u; else date -u +%u; fi
+}
 
 # --- preflight -------------------------------------------------------------
 : "${TASTILE_API_URL:?set TASTILE_API_URL to the isolated loopback API}"
@@ -66,6 +85,17 @@ esac
 note "== muse-shadow-e2e ${RUN}"
 note "api: ${TASTILE_API_URL}  bin: ${BIN}  out: ${OUT}"
 
+# Provenance: record what produced this run so evidence stays attributable.
+{
+  echo "run_id=${RUN}"
+  echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "api_base=${TASTILE_API_URL}"
+  echo "cli_bin=${BIN}"
+  "${BIN}" version 2>&1 || true
+  uname -a
+} >"${OUT}/provenance.txt"
+note "      provenance -> ${OUT}/provenance.txt"
+
 # Auth probe: an empty owner must still list successfully.
 check "authenticated source-tiles list" cli source-tiles list --json
 SOURCE_COUNT_BEFORE="$(json_get 'length')"
@@ -76,8 +106,11 @@ note "      existing sources for this owner: ${SOURCE_COUNT_BEFORE}"
 cli source-tiles list --json >"${OUT}/preclean-list.json" 2>/dev/null || true
 while IFS= read -r stale_id; do
   [[ -n "${stale_id}" ]] || continue
-  cli source-tiles cancel "${stale_id}" --reason-code 0 >/dev/null 2>&1 || true
-  note "      pre-clean: cancelled leftover ${stale_id}"
+  if cli source-tiles cancel "${stale_id}" --reason-code 0 >/dev/null 2>&1; then
+    note "      pre-clean: cancelled leftover ${stale_id}"
+  else
+    note "      pre-clean: could not cancel leftover ${stale_id} (continuing)"
+  fi
 done < <(jq -r '.[] | select(.source_state == 0) | select(.title | startswith("muse-e2e")) | .source_tile_id' "${OUT}/preclean-list.json" 2>/dev/null || true)
 
 CREATED=()
@@ -108,7 +141,8 @@ wait_placements() { # <source_id> <min_count> <timeout_s>
 
 # --- 1. one-time task: create -> placements -> execution lifecycle ---------
 T1="${RUN} once"
-cli source-tiles create --title "${T1}" --once 2026-11-21T10:00:00+09:00 --duration 30 \
+T1_DATE="$(add_days 2 jst)"
+cli source-tiles create --title "${T1}" --once "${T1_DATE}T10:00:00+09:00" --duration 30 \
   >"${OUT}/create-once.txt" 2>&1 \
   && pass "create one-time source" || { fail "create one-time source"; cat "${OUT}/create-once.txt"; }
 S1="$(new_source "${T1}")"
@@ -139,14 +173,23 @@ fi
 # --- 2. reads: today / prompts / timeline -------------------------------
 check "today" cli today
 check "prompts list" cli prompts list
-check "timeline next 3 days" cli timeline --start 2026-11-19T00:00:00Z --end 2026-11-22T00:00:00Z
-check "timeline with labels+blocked" cli timeline --start 2026-11-19T00:00:00Z --end 2026-11-22T00:00:00Z --include-labels --include-blocked --json
+TL_START="$(add_days 0 u)T00:00:00Z"
+TL_END="$(add_days 3 u)T00:00:00Z"
+check "timeline next 3 days" cli timeline --start "${TL_START}" --end "${TL_END}"
+check "timeline with labels+blocked" cli timeline --start "${TL_START}" --end "${TL_END}" --include-labels --include-blocked --json
 
 # --- 3. exception dates ----------------------------------------------------
 T2="${RUN} exception"
-# Exclude two upcoming Mondays (2026-11-23, 2026-11-30).
+# Exclude the next two Mondays (schedule-local JST dates); a Wednesday in
+# the same horizon is asserted present instead.
+JST_DOW="$(dow jst)"
+MON_DIFF=$(( (1 - JST_DOW + 7) % 7 )); (( MON_DIFF == 0 )) && MON_DIFF=7
+MON1="$(add_days "${MON_DIFF}" jst)"
+MON2="$(add_days $(( MON_DIFF + 7 )) jst)"
+WED_DIFF=$(( (3 - JST_DOW + 7) % 7 )); (( WED_DIFF == 0 )) && WED_DIFF=7
+WED="$(add_days "${WED_DIFF}" jst)"
 cli source-tiles create --title "${T2}" --weekly 09:00 --days mon,wed \
-  --utc-offset 540 --exclude 2026-11-23 --exclude 2026-11-30 \
+  --utc-offset 540 --exclude "${MON1}" --exclude "${MON2}" \
   --duration 30 --horizon-days 21 >"${OUT}/create-exc.txt" 2>&1 \
   && pass "create weekly with excluded dates" || fail "create weekly with excluded dates"
 S2="$(new_source "${T2}")"
@@ -156,23 +199,24 @@ if [[ -n "${S2}" ]]; then
   cli source-tiles placements "${S2}" --json >"${OUT}/placements-s2.json"
   # Every placement start (UTC) must not fall on an excluded local date.
   # 09:00 JST = 00:00 UTC same date, so the UTC date equals the local date.
-  if jq -e '[.[].start | .[0:10]] | index("2026-11-23") == null and index("2026-11-30") == null' \
+  if jq -e --arg m1 "${MON1}" --arg m2 "${MON2}" \
+       '[.[].start | .[0:10]] | index($m1) == null and index($m2) == null' \
        "${OUT}/placements-s2.json" >/dev/null; then
-    pass "excluded dates produce no placements"
+    pass "excluded dates produce no placements (${MON1}, ${MON2})"
   else
     fail "excluded date still produced a placement"
   fi
-  if jq -e '[.[].start | .[0:10]] | index("2026-11-25") != null' "${OUT}/placements-s2.json" >/dev/null; then
-    pass "non-excluded weekday still produces placements"
+  if jq -e --arg w "${WED}" '[.[].start | .[0:10]] | index($w) != null' "${OUT}/placements-s2.json" >/dev/null; then
+    pass "non-excluded weekday ${WED} still produces placements"
   else
-    fail "expected weekday missing"
+    fail "expected weekday ${WED} missing"
   fi
 fi
 
 # --- 4. label-only source --------------------------------------------------
 T3="${RUN} label"
-HSTART="$(date -u +%Y-%m-%dT00:00:00Z)"
-HEND="$(date -u -v+30d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '+30 days' +%Y-%m-%dT00:00:00Z)"
+HSTART="$(add_days 0 u)T00:00:00Z"
+HEND="$(add_days 30 u)T00:00:00Z"
 cat >"${OUT}/label-draft.json" <<EOF
 {
   "title": "${T3}",
@@ -190,7 +234,7 @@ S3="$(new_source "${T3}")"
 [[ -n "${S3}" ]] && CREATED+=("${S3}")
 if [[ -n "${S3}" ]]; then
   check "label placements materialize" wait_placements "${S3}" 3 120
-  cli timeline --start "${HSTART}" --end "$(date -u -v+2d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '+2 days' +%Y-%m-%dT00:00:00Z)" --include-labels --json >"${OUT}/timeline-labels.json" 2>/dev/null || true
+  cli timeline --start "${HSTART}" --end "$(add_days 2 u)T00:00:00Z" --include-labels --json >"${OUT}/timeline-labels.json" 2>/dev/null || true
   if jq -e '[.. | objects | select(.role? == 1)] | length > 0' "${OUT}/timeline-labels.json" >/dev/null 2>&1; then
     pass "label periods appear with role=1 (LABEL lane)"
   else
@@ -210,11 +254,14 @@ SLOW="$(new_source "${D1}")"; SHIGH="$(new_source "${D2}")"
 [[ -n "${SLOW}" ]] && CREATED+=("${SLOW}")
 [[ -n "${SHIGH}" ]] && CREATED+=("${SHIGH}")
 if [[ -n "${SLOW}" && -n "${SHIGH}" ]]; then
-  check "contended placements materialize" wait_placements "${SLOW}" 3 120
+  check "contended placements materialize (low)" wait_placements "${SLOW}" 3 120
+  check "contended placements materialize (high)" wait_placements "${SHIGH}" 3 120
   cli source-tiles placements "${SHIGH}" --json >"${OUT}/placements-high-before.json"
   HIGH_BEFORE="$(jq -c '[.[].placement_id] | sort' "${OUT}/placements-high-before.json")"
   OPEN_BEFORE="$(jq '[.[] | select(.closed == false)] | length' "${OUT}/placements-high-before.json")"
-  cli source-tiles reflow "${SLOW}" --from 2026-11-19T00:00:00Z --to 2026-11-27T00:00:00Z \
+  RF_FROM="$(add_days 0 u)T00:00:00Z"
+  RF_TO="$(add_days 8 u)T00:00:00Z"
+  cli source-tiles reflow "${SLOW}" --from "${RF_FROM}" --to "${RF_TO}" \
     >"${OUT}/reflow.txt" 2>&1 && pass "reflow low-priority source" || fail "reflow low-priority source"
   cli source-tiles placements "${SLOW}" --json >"${OUT}/placements-low-after.json"
   cli source-tiles placements "${SHIGH}" --json >"${OUT}/placements-high-after.json"
@@ -227,10 +274,10 @@ if [[ -n "${SLOW}" && -n "${SHIGH}" ]]; then
   LOW_OPEN="$(jq '[.[] | select(.closed == false)] | length' "${OUT}/placements-low-after.json")"
   HIGH_OPEN="$(jq '[.[] | select(.closed == false)] | length' "${OUT}/placements-high-after.json")"
   note "      after reflow: low open=${LOW_OPEN}, high open=${HIGH_OPEN} (was ${OPEN_BEFORE})"
-  if [[ "${LOW_OPEN}" == "0" && "${HIGH_OPEN}" == "${OPEN_BEFORE}" ]]; then
+  if [[ "${LOW_OPEN}" == "0" && "${HIGH_OPEN}" == "${OPEN_BEFORE}" && "${OPEN_BEFORE}" != "0" ]]; then
     pass "priority resolved contention: low-priority occurrences closed, high-priority kept"
   else
-    note "      NOTE: capacity outcome differs from the 2026-11-19 baseline; inspect ${OUT}/reflow.txt"
+    fail "priority contention outcome differs from the verified baseline (see ${OUT}/reflow.txt)"
   fi
 fi
 
@@ -239,8 +286,9 @@ cli prompts request --kind 1 --note "${RUN} probe" --json >"${OUT}/prompt.json" 
   && pass "prompt request" || fail "prompt request"
 PID="$(jq -r '.aggregate_meta.prompt_id // empty' "${OUT}/prompt.json" 2>/dev/null || true)"
 if [[ -z "${PID}" ]]; then
-  # fall back to the newest pending prompt in the list output
-  PID="$(cli prompts list --json 2>/dev/null | jq -r '.[0].id // empty' || true)"
+  # fall back to the newest pending prompt carrying this run's note
+  PID="$(cli prompts list --json 2>/dev/null \
+    | jq -r --arg n "${RUN} probe" '[.[] | select(.note == $n)] | sort_by(.created_at) | last | .id // empty' || true)"
 fi
 if [[ -n "${PID}" && "${PID}" != "null" ]]; then
   cli prompts resolve "${PID}" --resolution ack --note "${RUN}" >/dev/null 2>&1 \
@@ -251,7 +299,8 @@ fi
 
 # --- 7. cancel --------------------------------------------------------------
 T4="${RUN} cancel-me"
-cli source-tiles create --title "${T4}" --once 2026-11-28T09:00:00+09:00 --duration 15 \
+T4_DATE="$(add_days 7 jst)"
+cli source-tiles create --title "${T4}" --once "${T4_DATE}T09:00:00+09:00" --duration 15 \
   >"${OUT}/create-cancel.txt" 2>&1 && pass "create cancel target" || fail "create cancel target"
 S4="$(new_source "${T4}")"
 [[ -n "${S4}" ]] && CREATED+=("${S4}")
@@ -263,6 +312,19 @@ if [[ -n "${S4}" ]]; then
   cli source-tiles get "${S4}" --json >"${OUT}/get-cancelled.json" 2>"${OUT}/get-cancelled.err" || true
   STATE="$(jq -r '.source.source_state // .source_state // empty' "${OUT}/get-cancelled.json" 2>/dev/null || true)"
   [[ "${STATE}" == "3" ]] && pass "cancelled source reads back state=3" || fail "cancelled source state=${STATE:-unknown}"
+fi
+
+# --- 8. cleanup + verify no active leftovers -------------------------------
+for id in "${CREATED[@]:-}"; do
+  [[ -n "${id}" ]] || continue
+  cli source-tiles cancel "${id}" --reason-code 0 >/dev/null 2>&1 || true
+done
+cli source-tiles list --json >"${OUT}/final-list.json" 2>/dev/null || true
+LEFTOVER="$(jq '[.[] | select(.source_state == 0) | select(.title | startswith("muse-e2e"))] | length' "${OUT}/final-list.json" 2>/dev/null || echo "?")"
+if [[ "${LEFTOVER}" == "0" ]]; then
+  pass "no active muse-e2e sources left behind"
+else
+  fail "${LEFTOVER} active muse-e2e sources left behind (KEEP=1 to inspect)"
 fi
 
 note "== done: ${PASS} passed, ${FAIL} failed — evidence in ${OUT}"
