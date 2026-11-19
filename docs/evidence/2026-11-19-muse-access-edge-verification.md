@@ -12,7 +12,7 @@
 | CLI | `tastile-cli release-1-1-0 @ 582d7e1a`、`tastile 1.1.0` |
 | Muse 用 owner | `muse-verify-shadow` (`b6b05a6c-40a7-4315-a592-793bb2711c4a`)、label `muse-verify-shadow`、scopes `all`、expires `2026-12-31` |
 | credential | `~/.config/tastile-muse/credential.json` (mode 600、開発機ローカルのみ。repo・Issue・PR に値を書かない) |
-| 自動 E2E | `scripts/muse-shadow-e2e.sh` (本 PR で追加)。同一 owner で 32 項目中 31 PASS + state read-back 修正後の再確認が残る |
+| 自動 E2E | `scripts/muse-shadow-e2e.sh` (本 PR で追加)。同一 owner で **32/32 PASS** (2026-11-19T15:27Z run、証跡 `/tmp/muse-e2e.bRjrvT`) |
 
 ## 2. Muse → 検証 Core の接続経路
 
