@@ -1,0 +1,15 @@
+[
+  {
+    "placement_id": "01a1f46b-d7a3-7fd0-8382-a1b8567fd29d",
+    "source_tile_id": "01a1f46b-d788-7bf3-96e6-a5e70f485703",
+    "occurrence_id": "01a1f46b-d793-7243-b0bd-7c66bb8949f0",
+    "split_index": 0,
+    "split_count": 1,
+    "split_group_id": "01a1f46b-d793-7243-b0bd-7c66bb8949f0",
+    "start": "2026-11-21T01:00:00Z",
+    "end": "2026-11-21T01:30:00Z",
+    "closed": false,
+    "revision": 1,
+    "closed_at": null
+  }
+]

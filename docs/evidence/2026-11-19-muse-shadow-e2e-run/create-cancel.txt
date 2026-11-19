@@ -1,0 +1,8 @@
+[2m2026-11-19T15:27:52.045629Z[0m [32m INFO[0m tastile 1.1.0
+schedule: one-time at 2026-11-28T00:00:00+00:00
+✓ Created source tile.
+  command_id:  01a1f46b-dcf4-73e2-8614-9fdeb4f6e495
+  accepted_at: 2026-11-19 15:27:52.052420906 UTC
+  revision:    1
+  result:      2
+  aggregate:   01a1f46b-dcf4-73e2-8614-9fe0d0e48de2

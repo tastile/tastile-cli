@@ -1,0 +1,957 @@
+[
+  {
+    "source_tile_id": "01a1f46b-dcf4-73e2-8614-9fe0d0e48de2",
+    "plan_id": "01a1f46b-dcf4-73e2-8614-9ff3233d16c1",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 1,
+    "source_state": 0,
+    "title": "muse-e2e-20261119T152750Z cancel-me",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 900000,
+      "generation": {
+        "kind": 0,
+        "at": "2026-11-28T00:00:00Z",
+        "starts_at": null,
+        "interval_ms": null,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": null
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T15:27:52.052420Z",
+    "updated_at": "2026-11-19T15:27:52.052420Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f46b-dacf-7061-b6e4-e30b8d538ef8",
+    "plan_id": "01a1f46b-dacf-7061-b6e4-e314b41a9f3a",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 0,
+    "title": "muse-e2e-20261119T152750Z prio-low",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 7200000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-20T01:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 7200000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 10
+    },
+    "created_at": "2026-11-19T15:27:51.503165Z",
+    "updated_at": "2026-11-19T15:27:51.807815Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f46b-db27-7f90-b7f0-b7f26a7db6cd",
+    "plan_id": "01a1f46b-db27-7f90-b7f0-b8049e06661b",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 1,
+    "source_state": 0,
+    "title": "muse-e2e-20261119T152750Z prio-high",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 7200000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-20T01:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 7200000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 30
+    },
+    "created_at": "2026-11-19T15:27:51.590898Z",
+    "updated_at": "2026-11-19T15:27:51.590898Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f46b-d99c-7da1-920f-ee56f24ccc50",
+    "plan_id": "01a1f46b-d99c-7da1-920f-ee68ad835cf2",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 1,
+    "source_state": 0,
+    "title": "muse-e2e-20261119T152750Z label",
+    "plan_role": 1,
+    "schedule": {
+      "required_duration_ms": 1800000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-19T00:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": 127,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T15:27:51.195949Z",
+    "updated_at": "2026-11-19T15:27:51.195949Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f46b-d8f0-7240-b4b1-51a254008e65",
+    "plan_id": "01a1f46b-d8f0-7240-b4b1-51b13e14c52a",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 1,
+    "source_state": 0,
+    "title": "muse-e2e-20261119T152750Z exception",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 1800000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-20T00:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": 5,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [
+          "2026-11-23",
+          "2026-11-30"
+        ],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T15:27:51.024224Z",
+    "updated_at": "2026-11-19T15:27:51.024224Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f46b-d788-7bf3-96e6-a5e70f485703",
+    "plan_id": "01a1f46b-d788-7bf3-96e6-a5fc098ebef6",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 1,
+    "source_state": 0,
+    "title": "muse-e2e-20261119T152750Z once",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 1800000,
+      "generation": {
+        "kind": 0,
+        "at": "2026-11-21T01:00:00Z",
+        "starts_at": null,
+        "interval_ms": null,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": null
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T15:27:50.663124Z",
+    "updated_at": "2026-11-19T15:27:50.663124Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f42e-fb29-7f42-86fa-01c663143a9a",
+    "plan_id": "01a1f42e-fb29-7f42-86fa-01d15412c1d2",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e-20261119T142119Z cancel-me",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 900000,
+      "generation": {
+        "kind": 0,
+        "at": "2026-11-28T00:00:00Z",
+        "starts_at": null,
+        "interval_ms": null,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": null
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T14:21:22.089049Z",
+    "updated_at": "2026-11-19T14:21:22.089049Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f42e-f674-7ef2-82c8-7744f4502651",
+    "plan_id": "01a1f42e-f674-7ef2-82c8-775fceaa399d",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 3,
+    "source_state": 3,
+    "title": "muse-e2e-20261119T142119Z prio-low",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 7200000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-19T01:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 7200000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 10
+    },
+    "created_at": "2026-11-19T14:21:20.853414Z",
+    "updated_at": "2026-11-19T14:21:21.690269Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f42e-f7a3-7da1-b9a1-53458e44c463",
+    "plan_id": "01a1f42e-f7a3-7da1-b9a1-535b8da60067",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e-20261119T142119Z prio-high",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 7200000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-19T01:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 7200000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 30
+    },
+    "created_at": "2026-11-19T14:21:21.187072Z",
+    "updated_at": "2026-11-19T14:21:21.187072Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f42e-f375-7051-8f99-7060ae2a1394",
+    "plan_id": "01a1f42e-f375-7051-8f99-707803167d32",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e-20261119T142119Z label",
+    "plan_role": 1,
+    "schedule": {
+      "required_duration_ms": 1800000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-19T00:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": 127,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T14:21:20.116721Z",
+    "updated_at": "2026-11-19T14:21:20.116721Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f42e-f24f-7871-b749-eba0dcbdf8ae",
+    "plan_id": "01a1f42e-f24f-7871-b749-ebb2f7f5fd4d",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e-20261119T142119Z exception",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 1800000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-19T00:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": 5,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [
+          "2026-11-23",
+          "2026-11-30"
+        ],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T14:21:19.822470Z",
+    "updated_at": "2026-11-19T14:21:19.822470Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f42e-f070-7b71-8c2d-410e4b1965ca",
+    "plan_id": "01a1f42e-f070-7b71-8c2d-411f1b131d68",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e-20261119T142119Z once",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 1800000,
+      "generation": {
+        "kind": 0,
+        "at": "2026-11-21T01:00:00Z",
+        "starts_at": null,
+        "interval_ms": null,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": null
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T14:21:19.344095Z",
+    "updated_at": "2026-11-19T14:21:19.344095Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f42e-151b-72e0-a47f-252e5f6f7e36",
+    "plan_id": "01a1f42e-151b-72e0-a47f-253e6054a75e",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e-20261119T141819Z cancel-me",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 900000,
+      "generation": {
+        "kind": 0,
+        "at": "2026-11-28T00:00:00Z",
+        "starts_at": null,
+        "interval_ms": null,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": null
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T14:20:23.194159Z",
+    "updated_at": "2026-11-19T14:20:23.194159Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f42c-3802-7f51-9809-0b548c8b1ea8",
+    "plan_id": "01a1f42c-3802-7f51-9809-0b664046dc51",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e-20261119T141819Z prio-high",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 7200000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-19T01:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 7200000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 30
+    },
+    "created_at": "2026-11-19T14:18:21.057924Z",
+    "updated_at": "2026-11-19T14:18:21.057924Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f42c-36fb-7aa0-a09e-8580a6c8965e",
+    "plan_id": "01a1f42c-36fb-7aa0-a09e-8590f9942b7f",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e-20261119T141819Z prio-low",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 7200000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-19T01:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 7200000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 10
+    },
+    "created_at": "2026-11-19T14:18:20.795100Z",
+    "updated_at": "2026-11-19T14:18:20.795100Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f42c-3480-75f1-a918-601119c3a3ce",
+    "plan_id": "01a1f42c-3480-75f1-a918-602bf0d05ab3",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e-20261119T141819Z label",
+    "plan_role": 1,
+    "schedule": {
+      "required_duration_ms": 1800000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-19T00:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": 127,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T14:18:20.159471Z",
+    "updated_at": "2026-11-19T14:18:20.159471Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f42c-3365-7bf3-a15a-73e3cd729aa7",
+    "plan_id": "01a1f42c-3365-7bf3-a15a-73f47e8209c3",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e-20261119T141819Z exception",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 1800000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-19T00:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": 5,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [
+          "2026-11-23",
+          "2026-11-30"
+        ],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T14:18:19.877005Z",
+    "updated_at": "2026-11-19T14:18:19.877005Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f42c-30b6-7db2-8fa4-1b2f362fb34d",
+    "plan_id": "01a1f42c-30b6-7db2-8fa4-1b38d78ed4bd",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e-20261119T141819Z once",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 1800000,
+      "generation": {
+        "kind": 0,
+        "at": "2026-11-21T01:00:00Z",
+        "starts_at": null,
+        "interval_ms": null,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": null
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T14:18:19.189256Z",
+    "updated_at": "2026-11-19T14:18:19.189256Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f426-114a-7911-8171-5635aba05945",
+    "plan_id": "01a1f426-114a-7911-8171-5646cfc4f639",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 3,
+    "source_state": 3,
+    "title": "muse-e2e prio-low",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 7200000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-19T01:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 7200000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 10
+    },
+    "created_at": "2026-11-19T14:11:37.929731Z",
+    "updated_at": "2026-11-19T14:12:26.460257Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f426-11cb-77d0-8488-0bb2fac73cef",
+    "plan_id": "01a1f426-11cb-77d0-8488-0bc6e16e7901",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e prio-high",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 7200000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-19T01:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 7200000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 30
+    },
+    "created_at": "2026-11-19T14:11:38.057866Z",
+    "updated_at": "2026-11-19T14:11:38.057866Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f425-28e0-77b0-9bcb-d01f4c212b84",
+    "plan_id": "01a1f425-28e0-77b0-9bcb-d029430ee685",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e label-only",
+    "plan_role": 1,
+    "schedule": {
+      "required_duration_ms": 1800000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-19T00:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": 127,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T14:10:38.431447Z",
+    "updated_at": "2026-11-19T14:10:38.431447Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f424-c68d-7f03-adae-fea2565057d2",
+    "plan_id": "01a1f424-c68d-7f03-adae-feba8bb4bd3e",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e-exception weekly",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 1800000,
+      "generation": {
+        "kind": 1,
+        "at": null,
+        "starts_at": "2026-11-19T00:00:00Z",
+        "interval_ms": 86400000,
+        "ends_at": null,
+        "weekday_mask": 5,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [
+          "2026-11-23",
+          "2026-11-30"
+        ],
+        "offset_min": 540
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T14:10:13.260193Z",
+    "updated_at": "2026-11-19T14:10:13.260193Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  {
+    "source_tile_id": "01a1f424-1eb2-73d2-ae56-1f6d47cf9df8",
+    "plan_id": "01a1f424-1eb2-73d2-ae56-1f7123233dbd",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e-probe once",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 1800000,
+      "generation": {
+        "kind": 0,
+        "at": "2026-11-20T01:00:00Z",
+        "starts_at": null,
+        "interval_ms": null,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": null
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T14:09:30.288096Z",
+    "updated_at": "2026-11-19T14:09:30.288096Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  }
+]

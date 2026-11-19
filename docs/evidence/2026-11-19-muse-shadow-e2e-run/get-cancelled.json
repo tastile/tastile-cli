@@ -1,0 +1,102 @@
+{
+  "source": {
+    "source_tile_id": "01a1f46b-dcf4-73e2-8614-9fe0d0e48de2",
+    "plan_id": "01a1f46b-dcf4-73e2-8614-9ff3233d16c1",
+    "owner_id": "b6b05a6c-40a7-4315-a592-793bb2711c4a",
+    "revision": 2,
+    "source_state": 3,
+    "title": "muse-e2e-20261119T152750Z cancel-me",
+    "plan_role": 0,
+    "schedule": {
+      "required_duration_ms": 900000,
+      "generation": {
+        "kind": 0,
+        "at": "2026-11-28T00:00:00Z",
+        "starts_at": null,
+        "interval_ms": null,
+        "ends_at": null,
+        "weekday_mask": null,
+        "date_range_start": null,
+        "date_range_end": null,
+        "excluded_dates": [],
+        "offset_min": null
+      },
+      "window": {
+        "start_offset_ms": 0,
+        "end_offset_ms": 14400000
+      },
+      "split_policy": {
+        "kind": 0,
+        "min_segment_ms": null,
+        "max_segment_ms": null,
+        "max_segments": null
+      },
+      "priority": 0
+    },
+    "created_at": "2026-11-19T15:27:52.052420Z",
+    "updated_at": "2026-11-19T15:27:52.052420Z",
+    "color": null,
+    "description": null,
+    "external_id": null,
+    "icon": null
+  },
+  "relations": [],
+  "occurrences": [
+    {
+      "blocked": null,
+      "nominal_at": "2026-11-28T00:00:00Z",
+      "occurrence_id": "01a1f46b-dcf9-7631-8c02-86260835e9de",
+      "required_duration_ms": 900000,
+      "revision": 1,
+      "sequence_no": 0,
+      "source_tile_id": "01a1f46b-dcf4-73e2-8614-9fe0d0e48de2",
+      "state": 0,
+      "window_end": "2026-11-28T04:00:00Z",
+      "window_start": "2026-11-28T00:00:00Z"
+    }
+  ],
+  "placements": [
+    {
+      "placement_id": "01a1f46b-dd01-7ed1-8e67-cc07beb73235",
+      "source_tile_id": "01a1f46b-dcf4-73e2-8614-9fe0d0e48de2",
+      "occurrence_id": "01a1f46b-dcf9-7631-8c02-86260835e9de",
+      "split_index": 0,
+      "split_count": 1,
+      "split_group_id": "01a1f46b-dcf9-7631-8c02-86260835e9de",
+      "start": "2026-11-28T00:00:00Z",
+      "end": "2026-11-28T00:15:00Z",
+      "closed": true,
+      "revision": 2,
+      "closed_at": "2026-11-19T15:27:52.152748Z"
+    }
+  ],
+  "definition": {
+    "tile": {
+      "title": "muse-e2e-20261119T152750Z cancel-me",
+      "description": null,
+      "color": null,
+      "icon": null,
+      "external_id": null
+    },
+    "plan": {
+      "role": 0,
+      "completion": {
+        "root": {
+          "All": []
+        },
+        "tasks": [],
+        "time_requirements": []
+      },
+      "planning": {
+        "nesting_rules": [],
+        "placement_rules": []
+      },
+      "metrics": [],
+      "decisions": [],
+      "references": []
+    },
+    "flows": [],
+    "relations": [],
+    "source_client_local_id": null
+  }
+}

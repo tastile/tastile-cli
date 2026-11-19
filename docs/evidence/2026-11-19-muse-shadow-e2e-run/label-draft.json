@@ -1,0 +1,9 @@
+{
+  "title": "muse-e2e-20261119T152750Z label",
+  "priority": 0,
+  "required_duration_ms": 1800000,
+  "horizon_start": "2026-11-19T00:00:00Z",
+  "horizon_end": "2026-12-19T00:00:00Z",
+  "plan_role": 1,
+  "generation": {"kind": 1, "starts_at": "2026-11-19T00:00:00Z", "interval_ms": 86400000, "weekday_mask": 127, "offset_min": 540}
+}
