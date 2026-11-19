@@ -70,7 +70,7 @@ dow() { # <u|jst>
 : "${TASTILE_ISOLATED_TEST_STACK:?set TASTILE_ISOLATED_TEST_STACK=confirmed after verifying isolation}"
 [[ "${TASTILE_ISOLATED_TEST_STACK}" == "confirmed" ]] || { note "attestation must be exactly 'confirmed'"; exit 2; }
 [[ -f "${TASTILE_CREDENTIAL_FILE}" ]] || { note "credential file missing: ${TASTILE_CREDENTIAL_FILE}"; exit 2; }
-perm="$(stat -f '%Lp' "${TASTILE_CREDENTIAL_FILE}" 2>/dev/null || stat -c '%a' "${TASTILE_CREDENTIAL_FILE}")"
+perm="$(stat -c '%a' "${TASTILE_CREDENTIAL_FILE}" 2>/dev/null || stat -f '%Lp' "${TASTILE_CREDENTIAL_FILE}")"
 [[ "${perm}" == "600" ]] || { note "credential file must be mode 600 (got ${perm})"; exit 2; }
 
 hostport="${TASTILE_API_URL#*://}"
