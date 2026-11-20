@@ -822,8 +822,10 @@ pub async fn reflow_source_tile(
 /// Runs the same server-side reflow inside a rolled-back transaction and
 /// returns the `CommandResponse` apply would produce. Requires the write
 /// scope, like apply. The endpoint ships with tastile-core#413; callers
-/// must tolerate `404` from servers that predate it (and `403` from
-/// read-only credentials) by falling back to a local estimate.
+/// on a pre-#413 server see `404` (endpoint absent, or the source tile
+/// not found) and read-only credentials see `403`. A faithful dry-run
+/// must fail closed on those statuses; the local impact estimate is a
+/// separate opt-in mode, not a substitute.
 ///
 /// This path is not yet in the pinned `tastile-openapi` revision; it is
 /// added to `build.rs` `CONTRACTS` when the pin is bumped to a spec that
