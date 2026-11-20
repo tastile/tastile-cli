@@ -397,14 +397,14 @@ async fn reflow(
         None
     };
     let impact = app::placement_impact(ctx, id, Some((from, to))).await?;
-    output::print_impact("reflow", &impact);
     if dry_run {
         if estimate {
             println!(
-                "Estimate only (--estimate): the counts above are a local \
-                 overlap estimate, NOT the server's reflow decision. Do not \
-                 use this as an apply gate."
+                "== Local impact estimate (--estimate) ==\n\
+                 This is a local overlap count, NOT the server's reflow \
+                 decision. Do not use it as an apply gate."
             );
+            output::print_impact("reflow", &impact);
             println!("Dry run: no write sent.");
             return Ok(ExitCode::SUCCESS);
         }
@@ -420,8 +420,25 @@ async fn reflow(
         .await?
         {
             app::ReflowPreview::Faithful(resp) => {
-                println!("Server preview (rolled back, nothing was written):");
+                // The server preview is the authoritative change
+                // prediction: it ran the real reflow in a rolled-back
+                // transaction, so its placements, restorations,
+                // replacements, and blocked (unplaced) records are exactly
+                // what apply would produce.  Print it first and label the
+                // local count summary as reference-only.
+                println!(
+                    "== Server reflow preview (authoritative) ==\n\
+                     The server ran the real reflow inside a rolled-back \
+                     transaction. Everything below is the predicted apply \
+                     result; nothing was written."
+                );
                 output::print_command_response(&resp);
+                println!(
+                    "== Local impact estimate (reference only) ==\n\
+                     Counts above the server preview are a local overlap \
+                     estimate, NOT the server's decision."
+                );
+                output::print_impact("reflow", &impact);
                 println!("Dry run: no write sent.");
                 return Ok(ExitCode::SUCCESS);
             }
@@ -443,6 +460,8 @@ async fn reflow(
         }
     }
     let permit = permit.ok_or_else(|| anyhow!("reflow apply requires write preflight"))?;
+    println!("Local impact estimate (reference only; the server decides on apply):");
+    output::print_impact("reflow", &impact);
     let resp = app::reflow_source_tile_with_permit(
         ctx,
         id,
