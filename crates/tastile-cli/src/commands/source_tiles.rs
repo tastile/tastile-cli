@@ -397,6 +397,30 @@ async fn reflow(
     let impact = app::placement_impact(ctx, id, Some((from, to))).await?;
     output::print_impact("reflow", &impact);
     if dry_run {
+        match app::reflow_source_tile_preview(
+            ctx,
+            id,
+            tastile_api::Span {
+                start: from,
+                end: to,
+            },
+            expect_revision,
+        )
+        .await?
+        {
+            Some(resp) => {
+                println!("Server preview (rolled back, nothing was written):");
+                output::print_command_response(&resp);
+            }
+            None => {
+                println!(
+                    "Note: this server cannot run a faithful reflow preview \
+                     (endpoint unavailable or write scope required). \
+                     The impact counts above are a local estimate, not the \
+                     server's decision."
+                );
+            }
+        }
         println!("Dry run: no write sent.");
         return Ok(ExitCode::SUCCESS);
     }

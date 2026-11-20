@@ -697,6 +697,41 @@ pub(crate) async fn reflow_source_tile_with_permit(
         .context("reflow_source_tile failed")
 }
 
+/// Faithful reflow dry-run: ask the server to run the real reflow inside a
+/// rolled-back transaction (tastile-core#413) and return the
+/// `CommandResponse` apply would produce.
+///
+/// `Ok(None)` means the server cannot answer faithfully — the endpoint is
+/// absent (`404`, pre-#413 Core) or the credential lacks the write scope
+/// (`403`). Callers must treat `None` as "no faithful preview available",
+/// never as "nothing would change".
+pub async fn reflow_source_tile_preview(
+    ctx: &AppContext,
+    id: Uuid,
+    range: Span,
+    expected_revision: Option<i64>,
+) -> Result<Option<CommandResponse>> {
+    let token = ctx.require_token()?;
+    let revision = match expected_revision {
+        Some(revision) => revision,
+        None => {
+            api_source_tiles::get_source_tile(ctx, token, id)
+                .await
+                .context("fetching source tile revision before reflow preview failed")?
+                .source
+                .revision
+        }
+    };
+    let req = ReflowSourceTileRequest::new(range).with_expected_revision(revision);
+    match api_source_tiles::reflow_source_tile_preview(ctx, token, id, &req).await {
+        Ok(resp) => Ok(Some(resp)),
+        Err(ApiError::Http {
+            status: 404 | 403, ..
+        }) => Ok(None),
+        Err(e) => Err(e).context("reflow_source_tile_preview failed"),
+    }
+}
+
 pub async fn source_tile_completion(ctx: &AppContext, id: Uuid) -> Result<serde_json::Value> {
     let token = ctx.require_token()?;
     let v = api_source_tiles::get_source_tile_completion(ctx, token, id)
