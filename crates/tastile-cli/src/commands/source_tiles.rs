@@ -78,8 +78,9 @@ pub async fn run(cfg: tastile_config::Config, args: SourceTilesArgs) -> Result<E
             from,
             to,
             dry_run,
+            estimate,
             expect_revision,
-        } => reflow(&ctx, id, from, to, dry_run, expect_revision).await,
+        } => reflow(&ctx, id, from, to, dry_run, estimate, expect_revision).await,
     }
 }
 
@@ -383,6 +384,7 @@ async fn reflow(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
     dry_run: bool,
+    estimate: bool,
     expect_revision: Option<i64>,
 ) -> Result<ExitCode> {
     if from >= to {
@@ -397,8 +399,48 @@ async fn reflow(
     let impact = app::placement_impact(ctx, id, Some((from, to))).await?;
     output::print_impact("reflow", &impact);
     if dry_run {
-        println!("Dry run: no write sent.");
-        return Ok(ExitCode::SUCCESS);
+        if estimate {
+            println!(
+                "Estimate only (--estimate): the counts above are a local \
+                 overlap estimate, NOT the server's reflow decision. Do not \
+                 use this as an apply gate."
+            );
+            println!("Dry run: no write sent.");
+            return Ok(ExitCode::SUCCESS);
+        }
+        match app::reflow_source_tile_preview(
+            ctx,
+            id,
+            tastile_api::Span {
+                start: from,
+                end: to,
+            },
+            expect_revision,
+        )
+        .await?
+        {
+            app::ReflowPreview::Faithful(resp) => {
+                println!("Server preview (rolled back, nothing was written):");
+                output::print_command_response(&resp);
+                println!("Dry run: no write sent.");
+                return Ok(ExitCode::SUCCESS);
+            }
+            app::ReflowPreview::Unavailable { status } => {
+                let reason = match status {
+                    403 => "credential lacks the write scope the preview endpoint requires",
+                    404 => {
+                        "preview endpoint is unavailable on this server (pre-#413 Core) \
+                         or the source tile was not found"
+                    }
+                    _ => "unexpected status",
+                };
+                bail!(
+                    "cannot produce a faithful reflow preview: {reason} (HTTP {status}). \
+                     Re-run with --estimate for a local impact estimate only, \
+                     which is not the server's decision."
+                );
+            }
+        }
     }
     let permit = permit.ok_or_else(|| anyhow!("reflow apply requires write preflight"))?;
     let resp = app::reflow_source_tile_with_permit(

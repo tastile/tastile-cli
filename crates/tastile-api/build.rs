@@ -238,7 +238,17 @@ const CONTRACTS: &[OperationContract] = &[
         request_body_schema: Some("ReflowSourceTileRequest"),
         response_200: ResponseSpec::Ref("CommandResponse"),
         path_params: &["id"],
-        required_envelope_fields: &["idempotency_key", "payload"],
+        required_envelope_fields: &["expected_revision", "idempotency_key", "payload"],
+        payload_required_fields: &["range"],
+    },
+    OperationContract {
+        operation_id: "preview_source_tile_reflow",
+        method: "post",
+        path: "/v1/source-tiles/{id}/reflow/preview",
+        request_body_schema: Some("ReflowSourceTileRequest"),
+        response_200: ResponseSpec::Ref("CommandResponse"),
+        path_params: &["id"],
+        required_envelope_fields: &["expected_revision", "idempotency_key", "payload"],
         payload_required_fields: &["range"],
     },
     OperationContract {

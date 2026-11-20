@@ -817,6 +817,25 @@ pub async fn reflow_source_tile(
     client.post_json(token, &path, req).await
 }
 
+/// `POST /v1/source-tiles/{id}/reflow/preview` → faithful dry-run.
+///
+/// Runs the same server-side reflow inside a rolled-back transaction and
+/// returns the `CommandResponse` apply would produce. Requires the write
+/// scope, like apply. The endpoint ships with tastile-core#413 (pinned
+/// OpenAPI v3.9.0); callers on a pre-#413 server see `404` (endpoint
+/// absent, or the source tile not found) and read-only credentials see
+/// `403`. A faithful dry-run must fail closed on those statuses; the
+/// local impact estimate is a separate opt-in mode, not a substitute.
+pub async fn reflow_source_tile_preview(
+    client: &ApiClient,
+    token: &BearerToken,
+    id: Uuid,
+    req: &ReflowSourceTileRequest,
+) -> ApiResult<CommandResponse> {
+    let path = format!("/v1/source-tiles/{id}/reflow/preview");
+    client.post_json(token, &path, req).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

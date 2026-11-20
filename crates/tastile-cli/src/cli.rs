@@ -357,6 +357,11 @@ pub enum SourceTilesCommand {
         /// Show the affected placements and stop.
         #[arg(long)]
         dry_run: bool,
+        /// With --dry-run, show only the local placement estimate instead of
+        /// requiring the server's faithful reflow preview. The estimate is
+        /// not the server's decision and must not be used as an apply gate.
+        #[arg(long, requires = "dry_run")]
+        estimate: bool,
         /// Override the freshly-read revision used to reject stale writes.
         #[arg(long, value_name = "N")]
         expect_revision: Option<i64>,
