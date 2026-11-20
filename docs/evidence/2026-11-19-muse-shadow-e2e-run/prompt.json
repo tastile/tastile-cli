@@ -1,0 +1,23 @@
+{
+  "command_id": "01a1f46b-dcbc-7403-80b3-4619f8840050",
+  "accepted_at": "2026-11-19T15:27:51.996369457Z",
+  "result": 2,
+  "pending": [],
+  "revision": null,
+  "aggregate": null,
+  "aggregate_meta": {
+    "change_ids": [],
+    "changeset_id": null,
+    "flow_ids": [],
+    "frame_rule_id": null,
+    "occurrence_ids": [],
+    "placement_ids": [],
+    "plan_id": null,
+    "prompt_id": "01a1f46b-dcbc-7403-80b3-462e77f102b1",
+    "recurring_id": null,
+    "source_tile_id": null,
+    "tile_id": null,
+    "unplaced_occurrences": [],
+    "window_ids": []
+  }
+}

@@ -89,6 +89,19 @@ The binary. Single `tokio` runtime, subcommand-dispatched.
   stored credential from the keyring, and exposes typed wrappers
   (`today`, `create_source_tile_draft`, `start_execution`,
   `resolve_prompt`, …).
+- `safety.rs` — the **write-target gate**. Every mutating command calls
+  the shared app write gate before it sends a request (`schedule publish`
+  has its stricter loopback-only variant). The gate classifies the
+  configured API base (loopback / remote, TLS / plaintext, reserved
+  operational port) and then probes the target with a documented read
+  endpoint to prove it answers as a Tastile v1 API that accepts the
+  stored credential. The classification is a pure function, so it is
+  unit-tested without touching the process environment.
+- `simple_input.rs` — the convenience recurrence input
+  (`--once` / `--daily` / `--weekly` / `--days` / `--exclude`). It only
+  produces the shapes the pinned contract describes; anything it cannot
+  express exactly (for example a monthly rule) is refused with an
+  explicit error instead of being approximated.
 - `cli.rs` — `clap` derive. Subcommands are user-friendly (e.g.
   `tastile source-tiles create --title …`, `tastile prompts resolve
   --resolution ack`); they never echo the API operation name.
@@ -99,15 +112,83 @@ The binary. Single `tokio` runtime, subcommand-dispatched.
   no args → TUI, subcommand → CLI. The TUI calls the same
   `app::*` functions as the CLI.
 
-## Wire contract: 18 of 21 operations across 5 areas
+### Write-target safety gate
+
+A loopback API base is ambiguous: it can be an isolated test stack or the
+operational Muse stack that owns the real schedule. `ApiConfig` rejects port
+31400 before any API request, including reads. `safety.rs` applies the
+remaining target rules to every write:
+
+| Target | Decision |
+| --- | --- |
+| Loopback, any other port | Allowed only with `TASTILE_ISOLATED_TEST_STACK=confirmed`. |
+| Remote, `http://` | Refused — plaintext remote API bases are rejected for reads and writes. |
+| Remote, `https://` | Allowed — the operator configured that host explicitly. |
+
+The server-side revocation attempted by `auth logout` uses the same gate;
+local credential removal still completes when the API revoke is refused or
+unavailable.
+
+The attestation is a safeguard, not proof of isolation: it records that
+somebody checked the database, owner, worker and notification sink of the
+target stack. The identity probe (a documented read endpoint) proves the
+URL points at a Tastile v1 API that accepts the account — it does not
+prove isolation.
+
+### Read completeness, diffs and revision conflicts
+
+- **Pagination.** `tastile-api` follows cursor pages for `/v1/tiles`,
+  source-tile list and placements; source-tile detail independently pages
+  occurrences and placements. Legacy array responses are decoded during
+  the transition, but a full legacy page fails explicitly because the
+  client cannot prove it is complete. `/v1/tiles` requests the pinned
+  1,000-row maximum and rejects a cursorless 500-item response to account
+  for the pre-cursor Core cap. No `offset` parameter is sent. The pinned
+  pending-prompt list operation has no pagination contract, so its
+  completeness cannot be proven if Core adds a result cap.
+- **Today.** `tastile today` requests the full tile projection and keeps
+  only rows with a `projected_next_start_at` at or after the local current
+  instant. This filters stale past projections and entries with no known
+  next start before selecting the earliest upcoming tile.
+- **Diffs.** `source-tiles update --dry-run` merges the patch onto the
+  `definition` read-back (v1/14 §17) and diffs the resulting payload
+  against the stored definition field-by-field: tile, plan, schedule,
+  flows, relations and `source_client_local_id`. `horizon` is excluded
+  because Core never persists it.
+- **Merge-or-replace.** `PUT /v1/source-tiles/{id}` replaces the complete
+  payload; the pinned contract has no PATCH or diff endpoint. The CLI
+  rebuilds that payload from `SourceTileDetailRead.definition` plus
+  `source.schedule`, so omitted patch fields are preserved instead of
+  silently reset. Explicit `null` clears nullable fields, `[]` clears
+  collections, `plan` subfields merge individually, and `horizon` must be
+  supplied on every update because it is a materialization input Core
+  never persists. Relation refs read back normalized to `existing`
+  (§17-2); `local` authoring syntax is not preserved.
+- **Revision conflicts.** Update uses the revision from the read shown in
+  its diff; cancel and reflow fetch the current revision before mutation.
+  `--expect-revision` overrides that default. Each value maps to the
+  `expected_revision` envelope field; the server answers `409` when the
+  stored revision moved on, and the CLI surfaces that conflict instead of
+  overwriting the change. Reflow always sends the field to remain compatible
+  with Core PR #302, which makes it mandatory.
+- **Impact preview and readback.** `cancel` / `reflow --dry-run` list the
+  placements in scope; after a successful write the CLI reads the source
+  tile and its placements back and prints the resulting state.
+- **Placement.** Simple create flags describe a schedule; Core's worker
+  materializes occurrences and placements. The CLI does not invent a
+  client-side auto-placement command or promise placements before the
+  worker has processed the new source.
+- **Numeric cancel reason.** `CancelSourceTilePayloadSchema.reason` is an
+  integer registry code in the contract, so the CLI sends
+  `--reason-code` (0 = user-requested) instead of free text.
+
+## Wire contract: 19 of 21 operations across 6 areas
 
 The pinned `openapi/openapi.yaml` declares 21 `operationId`s in total. The
-CLI surface intentionally covers **18** of them — the operations a
-command-line or TUI client can drive today. The remaining 3
-(`delete_owner`, `export_owner`, `publish_schedule_definition`) are
-admin / data-portability endpoints that are out of scope for the
-initial CLI; they will land in a later release once a real consumer
-asks for them.
+CLI surface covers **19** of them, including `publish_schedule_definition`
+for offline preview and an explicit loopback-only Core write. The remaining
+2 (`delete_owner`, `export_owner`) are administrative endpoints and are not
+included in the typed CLI surface.
 
 | Area | Module | Operations |
 | --- | --- | --- |
@@ -116,14 +197,14 @@ asks for them.
 | source-tiles | `source_tiles.rs` | `list_source_tiles`, `get_source_tile`, `create_source_tile`, `update_source_tile`, `cancel_source_tile`, `get_source_tile_completion`, `list_source_tile_placements`, `reflow_source_tile` |
 | executions | `executions.rs` | `start_execution`, `pause_execution`, `resume_execution`, `finish_execution` |
 | auth | `auth.rs` | `signout` |
+| schedule | `schedule.rs` | `publish_schedule_definition` |
 
-Total CLI surface: 18 of 21. The drift gate in `build.rs` enforces every
-one of the 18 — a row in `OperationContract` per operation, with
-path, method, operationId, path params, request schema, required
-payload fields, and 200 response shape all checked at build time. The
-3 admin operations are **not** in the contract, so they are **not**
-covered by the drift gate; if they are needed later, add a row and the
-gate will pick them up.
+Total CLI surface: 19 of 21. The drift gate in `build.rs` checks all
+19 entries for method, path, operationId, request schema, required payload
+fields and response. The 2 remaining administrative operations are not yet
+covered. The new `schedule publish` command deliberately separates offline
+payload preview from explicit `--apply` and allows mutation of loopback Core
+only; this is not evidence of Muse migration readiness.
 
 ## Authentication: browser-mediated authorization-code grant
 

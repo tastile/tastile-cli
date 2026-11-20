@@ -12,4 +12,5 @@ pub mod prompts;
 pub mod schedule;
 pub mod source_tiles;
 pub mod tiles;
+pub mod timeline;
 pub mod today;

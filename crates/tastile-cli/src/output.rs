@@ -58,6 +58,59 @@ fn short(s: &str, max: usize) -> String {
     }
 }
 
+fn unplaced_occurrence_row(
+    occurrence_id: Option<&serde_json::Value>,
+    blocked: &serde_json::Value,
+) -> Option<Vec<String>> {
+    let reason = blocked.get("reason")?.as_i64()?;
+    let reason = match reason {
+        0 => "INSUFFICIENT_CAPACITY".to_string(),
+        1 => "LIMIT_CONFLICT".to_string(),
+        2 => "PRIORITY_TIE_CONFLICT".to_string(),
+        other => format!("UNKNOWN({other})"),
+    };
+    let field = |name: &str| {
+        blocked
+            .get(name)
+            .and_then(|value| match value {
+                serde_json::Value::String(text) => Some(text.clone()),
+                serde_json::Value::Number(number) => Some(number.to_string()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "-".to_string())
+    };
+    let occurrence_id = occurrence_id
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("-")
+        .to_string();
+
+    Some(vec![
+        occurrence_id,
+        reason,
+        field("required_duration_ms"),
+        field("available_duration_ms"),
+        field("blocked_at"),
+        field("conflicting_source_tile_id"),
+    ])
+}
+
+fn print_unplaced_occurrences(rows: Vec<Vec<String>>) {
+    if !rows.is_empty() {
+        println!("Unplaced occurrences:");
+        print_table(
+            &[
+                "occurrence_id",
+                "reason",
+                "required_ms",
+                "available_ms",
+                "blocked_at",
+                "conflicting_source_id",
+            ],
+            rows,
+        );
+    }
+}
+
 pub fn print_tile(t: &TileListView) {
     println!("{}", t.title);
     println!("  id:          {}", t.id);
@@ -154,6 +207,48 @@ pub fn print_source_tile_detail(detail: &tastile_api::SourceTileDetailRead) {
     println!("  relations:  {} entries", detail.relations.len());
     println!("  occurrences: {} entries", detail.occurrences.len());
     println!("  placements:  {} entries", detail.placements.len());
+    let unplaced = detail
+        .occurrences
+        .iter()
+        .filter_map(|occurrence| {
+            let blocked = occurrence.0.get("blocked")?;
+            if blocked.is_null() {
+                return None;
+            }
+            unplaced_occurrence_row(occurrence.0.get("occurrence_id"), blocked)
+        })
+        .collect();
+    print_unplaced_occurrences(unplaced);
+    let schedule = &s.schedule;
+    println!(
+        "  schedule:    kind={} duration={}ms priority={}",
+        schedule.generation.kind, schedule.required_duration_ms, schedule.priority
+    );
+    if let Some(at) = schedule.generation.at {
+        println!("  at:          {}", at);
+    }
+    if let Some(starts_at) = schedule.generation.starts_at {
+        println!("  starts_at:   {}", starts_at);
+    }
+    if let Some(interval_ms) = schedule.generation.interval_ms {
+        println!("  interval_ms: {}", interval_ms);
+    }
+    if let Some(mask) = schedule.generation.weekday_mask {
+        println!("  weekday_mask: {mask}");
+    }
+    if let Some(offset) = schedule.generation.offset_min {
+        println!("  offset_min:  {offset}");
+    }
+    if !schedule.generation.excluded_dates.is_empty() {
+        println!(
+            "  excluded:    {}",
+            schedule.generation.excluded_dates.join(", ")
+        );
+    }
+    println!(
+        "  window:      {}..{} ms after the nominal time",
+        schedule.window.start_offset_ms, schedule.window.end_offset_ms
+    );
     print_placements_table(&detail.placements);
 }
 
@@ -205,7 +300,143 @@ pub fn print_command_response(r: &tastile_api::CommandResponse) {
         println!("  revision:    {rev}");
     }
     println!("  result:      {}", r.result);
+    if let Some(aggregate) = &r.aggregate {
+        if let Some(id) = aggregate.get("id").and_then(|value| value.as_str()) {
+            println!("  aggregate:   {id}");
+        }
+    }
     if !r.pending.is_empty() {
         println!("  pending:     {} items", r.pending.len());
     }
+    let unplaced = r
+        .aggregate_meta
+        .as_ref()
+        .and_then(|metadata| metadata.get("unplaced_occurrences"))
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| unplaced_occurrence_row(item.get("occurrence_id"), item))
+                .collect()
+        })
+        .unwrap_or_default();
+    print_unplaced_occurrences(unplaced);
+}
+
+/// Print the field-level diff between the stored source tile and a
+/// proposed draft.
+pub fn print_diff(diffs: &[crate::app::FieldDiff]) {
+    if diffs.is_empty() {
+        println!("No field changes detected by the read model.");
+        return;
+    }
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(diffs.len());
+    for d in diffs {
+        rows.push(vec![
+            d.field.clone(),
+            short(&d.current, 40),
+            short(&d.proposed, 40),
+        ]);
+    }
+    print_table(&["field", "current", "proposed"], rows);
+}
+
+/// Print the placement scope a cancel / reflow would touch.
+pub fn print_impact(operation: &str, impact: &crate::app::PlacementImpact) {
+    println!(
+        "{operation} impact: {} placement(s) owned, {} still open, {} in scope",
+        impact.total, impact.open, impact.in_range
+    );
+    if !impact.rows.is_empty() {
+        print_placements_table(&impact.rows);
+    }
+}
+
+/// Print the state read back from the server after a write.
+pub fn print_readback(state: &crate::app::SourceTileState) {
+    println!(
+        "  readback:    state={} revision={} placements={} (open {})",
+        state.source_state, state.revision, state.placements_total, state.placements_open
+    );
+}
+
+/// Print timeline items ordered as the server returns them
+/// (`span.start ASC, placement_id ASC`). LABEL (`role = 1`) rows are
+/// non-blocking label periods and are counted separately — they never
+/// count as busy time (v1/14 §4).
+pub fn print_timeline(items: &[tastile_api::TimelineItem]) {
+    if items.is_empty() {
+        println!("(no placements in range)");
+        return;
+    }
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(items.len());
+    let mut label_count = 0usize;
+    for item in items {
+        if item.role == 1 {
+            label_count += 1;
+        }
+        rows.push(vec![
+            item.span.start.format("%Y-%m-%d %H:%M").to_string(),
+            item.span.end.format("%H:%M").to_string(),
+            timeline_role(item),
+            timeline_title(item),
+            timeline_state(item),
+            timeline_notes(item),
+        ]);
+    }
+    print_table(&["start", "end", "role", "title", "state", "notes"], rows);
+    if label_count > 0 {
+        println!(
+            "{label_count} LABEL item(s) are non-blocking label periods; they never count as busy time."
+        );
+    }
+}
+
+fn timeline_role(item: &tastile_api::TimelineItem) -> String {
+    match item.role {
+        0 => "EXEC".to_string(),
+        1 => "LABEL".to_string(),
+        other => format!("role={other}"),
+    }
+}
+
+fn timeline_title(item: &tastile_api::TimelineItem) -> String {
+    if item.inside.is_some() {
+        format!("  {}", item.content.title)
+    } else {
+        item.content.title.clone()
+    }
+}
+
+fn timeline_state(item: &tastile_api::TimelineItem) -> String {
+    match item.resolution.state {
+        0 => "open".to_string(),
+        1 => "closed".to_string(),
+        2 => format!("BLOCKED({})", item.resolution.violations.len()),
+        other => format!("state={other}"),
+    }
+}
+
+fn timeline_notes(item: &tastile_api::TimelineItem) -> String {
+    let mut notes = Vec::new();
+    if item.inside.is_some() {
+        notes.push("nested".to_string());
+    }
+    if let (Some(split_index), Some(split_count)) = (item.split_index, item.split_count) {
+        if split_count > 1 {
+            notes.push(format!("split {split_index}/{split_count}"));
+        }
+    }
+    match item.source.kind {
+        0 => notes.push("manual".to_string()),
+        1 => notes.push("recurring".to_string()),
+        2 => notes.push("flow".to_string()),
+        3 => notes.push("import".to_string()),
+        4 => notes.push("source".to_string()),
+        other => notes.push(format!("source={other}")),
+    }
+    if let Some(owner) = &item.owner {
+        notes.push(format!("owner:{}", owner.profile.display_name));
+    }
+    notes.join(", ")
 }

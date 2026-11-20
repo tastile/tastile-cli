@@ -12,7 +12,7 @@ pub async fn run(cfg: tastile_config::Config, args: TodayArgs) -> Result<ExitCod
     let ctx = AppContext::load(cfg)?;
     match app::next_actionable(&ctx).await? {
         None => {
-            println!("No tiles scheduled for today.");
+            println!("No upcoming tiles.");
             Ok(ExitCode::SUCCESS)
         }
         Some(t) => {

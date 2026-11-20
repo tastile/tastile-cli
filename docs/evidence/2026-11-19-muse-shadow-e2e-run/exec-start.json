@@ -1,0 +1,12 @@
+{
+  "command_id": "01a1f46b-d821-79d0-9b8b-52d87d893a9f",
+  "accepted_at": "2026-11-19T15:27:50.817278569Z",
+  "result": 0,
+  "pending": [],
+  "revision": 1,
+  "aggregate": {
+    "id": "01a1f46b-d821-79d0-9b8b-52e34611fb11",
+    "kind": 2
+  },
+  "aggregate_meta": null
+}

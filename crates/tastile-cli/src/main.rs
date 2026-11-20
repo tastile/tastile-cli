@@ -8,7 +8,7 @@
 //! helper functions in [`app`] so the HTTP layer is implemented exactly
 //! once.
 
-#![doc(html_root_url = "https://docs.rs/tastile-cli/1.0.0")]
+#![doc(html_root_url = "https://docs.rs/tastile-cli/1.1.0")]
 
 use std::process::ExitCode;
 
@@ -19,6 +19,8 @@ mod app;
 mod cli;
 mod commands;
 mod output;
+mod safety;
+mod simple_input;
 mod tracing_init;
 mod tui;
 
@@ -46,7 +48,10 @@ fn main() -> ExitCode {
     match result {
         Ok(code) => code,
         Err(e) => {
-            error!("{e}");
+            // `{e:#}` prints the whole anyhow chain, so the operator sees the
+            // root cause (for example the credential-store backend error)
+            // instead of only the outer context.
+            error!("{e:#}");
             ExitCode::FAILURE
         }
     }
@@ -66,6 +71,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Some(Command::Doctor) => commands::doctor::run(cfg).await,
         Some(Command::Tiles(args)) => commands::tiles::run(cfg, args).await,
         Some(Command::Today(args)) => commands::today::run(cfg, args).await,
+        Some(Command::Timeline(args)) => commands::timeline::run(cfg, args).await,
         Some(Command::Schedule(args)) => commands::schedule::run(cfg, args).await,
         Some(Command::SourceTiles(args)) => commands::source_tiles::run(cfg, args).await,
         Some(Command::Executions(args)) => commands::executions::run(cfg, args).await,
@@ -80,6 +86,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             );
             println!("wire:");
             println!("  GET    /v1/tiles");
+            println!("  POST   /v1/schedule-definitions");
             println!("  GET    /v1/prompts/pending");
             println!("  POST   /v1/prompts");
             println!("  POST   /v1/prompts/{{id}}/resolve");

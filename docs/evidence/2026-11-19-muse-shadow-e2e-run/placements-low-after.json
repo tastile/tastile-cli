@@ -1,0 +1,93 @@
+[
+  {
+    "placement_id": "01a1f46b-db06-7763-b7d3-73a444727ab2",
+    "source_tile_id": "01a1f46b-dacf-7061-b6e4-e30b8d538ef8",
+    "occurrence_id": "01a1f46b-dad6-74a0-bc0b-fdc91a6dfcb0",
+    "split_index": 0,
+    "split_count": 1,
+    "split_group_id": "01a1f46b-dad6-74a0-bc0b-fdc91a6dfcb0",
+    "start": "2026-11-20T01:00:00Z",
+    "end": "2026-11-20T03:00:00Z",
+    "closed": true,
+    "revision": 2,
+    "closed_at": "2026-11-19T15:27:51.807815Z"
+  },
+  {
+    "placement_id": "01a1f46b-db08-7651-b534-a93e49290783",
+    "source_tile_id": "01a1f46b-dacf-7061-b6e4-e30b8d538ef8",
+    "occurrence_id": "01a1f46b-dad6-74a0-bc0b-fdde3a2f3bb4",
+    "split_index": 0,
+    "split_count": 1,
+    "split_group_id": "01a1f46b-dad6-74a0-bc0b-fdde3a2f3bb4",
+    "start": "2026-11-21T01:00:00Z",
+    "end": "2026-11-21T03:00:00Z",
+    "closed": true,
+    "revision": 2,
+    "closed_at": "2026-11-19T15:27:51.807815Z"
+  },
+  {
+    "placement_id": "01a1f46b-db08-7651-b534-a98b862499ed",
+    "source_tile_id": "01a1f46b-dacf-7061-b6e4-e30b8d538ef8",
+    "occurrence_id": "01a1f46b-dad6-74a0-bc0b-fde4a58d432d",
+    "split_index": 0,
+    "split_count": 1,
+    "split_group_id": "01a1f46b-dad6-74a0-bc0b-fde4a58d432d",
+    "start": "2026-11-22T01:00:00Z",
+    "end": "2026-11-22T03:00:00Z",
+    "closed": true,
+    "revision": 2,
+    "closed_at": "2026-11-19T15:27:51.807815Z"
+  },
+  {
+    "placement_id": "01a1f46b-db09-7c13-a866-2aa0bfc62712",
+    "source_tile_id": "01a1f46b-dacf-7061-b6e4-e30b8d538ef8",
+    "occurrence_id": "01a1f46b-dad7-7561-8208-9b6ca86579fe",
+    "split_index": 0,
+    "split_count": 1,
+    "split_group_id": "01a1f46b-dad7-7561-8208-9b6ca86579fe",
+    "start": "2026-11-23T01:00:00Z",
+    "end": "2026-11-23T03:00:00Z",
+    "closed": true,
+    "revision": 2,
+    "closed_at": "2026-11-19T15:27:51.807815Z"
+  },
+  {
+    "placement_id": "01a1f46b-db0a-7623-8ec5-c517faf06c02",
+    "source_tile_id": "01a1f46b-dacf-7061-b6e4-e30b8d538ef8",
+    "occurrence_id": "01a1f46b-dad7-7561-8208-9b798c7d2912",
+    "split_index": 0,
+    "split_count": 1,
+    "split_group_id": "01a1f46b-dad7-7561-8208-9b798c7d2912",
+    "start": "2026-11-24T01:00:00Z",
+    "end": "2026-11-24T03:00:00Z",
+    "closed": true,
+    "revision": 2,
+    "closed_at": "2026-11-19T15:27:51.807815Z"
+  },
+  {
+    "placement_id": "01a1f46b-db0b-7f83-81cf-1dc3ef383f5a",
+    "source_tile_id": "01a1f46b-dacf-7061-b6e4-e30b8d538ef8",
+    "occurrence_id": "01a1f46b-dad7-7561-8208-9b8eeca20b35",
+    "split_index": 0,
+    "split_count": 1,
+    "split_group_id": "01a1f46b-dad7-7561-8208-9b8eeca20b35",
+    "start": "2026-11-25T01:00:00Z",
+    "end": "2026-11-25T03:00:00Z",
+    "closed": true,
+    "revision": 2,
+    "closed_at": "2026-11-19T15:27:51.807815Z"
+  },
+  {
+    "placement_id": "01a1f46b-db0b-7f83-81cf-1e1e386ddb79",
+    "source_tile_id": "01a1f46b-dacf-7061-b6e4-e30b8d538ef8",
+    "occurrence_id": "01a1f46b-dad7-7561-8208-9b9488212b76",
+    "split_index": 0,
+    "split_count": 1,
+    "split_group_id": "01a1f46b-dad7-7561-8208-9b9488212b76",
+    "start": "2026-11-26T01:00:00Z",
+    "end": "2026-11-26T03:00:00Z",
+    "closed": true,
+    "revision": 2,
+    "closed_at": "2026-11-19T15:27:51.807815Z"
+  }
+]

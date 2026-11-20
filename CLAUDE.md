@@ -4,9 +4,8 @@ This file is the thin Claude-Code-specific adapter for `tastile-cli`. The
 canonical contract for this workspace is `AGENTS.md`. Read it before
 opening any tool.
 
-Claude Code specific settings live in `.claude/settings.json`, hooks in
-`.claude/hooks/`, and thin Skill adapters in `.claude/skills/`. Do not
-duplicate project-wide rules here.
+Project-local Skills for Claude Code live in `.claude/skills/` (vendored
+copies; see `AGENTS.md` §8). Do not duplicate project-wide rules here.
 
 ## Adapter-specific notes
 

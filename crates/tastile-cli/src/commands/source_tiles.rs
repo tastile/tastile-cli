@@ -1,29 +1,86 @@
 //! `tastile source-tiles` — list / create / get / update / cancel /
 //! completion / placements / reflow source tiles.
 //!
-//! All HTTP work goes through `crate::app::*`.
+//! All HTTP work goes through `crate::app::*`. Every mutating command
+//! sends a request through the shared guarded `app::*` service layer, and
+//! every mutating command either previews its scope (`--dry-run`) or reads
+//! the resulting state back from the server.
 
 use std::fs;
 use std::process::ExitCode;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::app::{self, AppContext, CreateSourceTileDraft};
 use crate::cli::{SourceTilesArgs, SourceTilesCommand};
 use crate::output;
+use crate::simple_input::{self, ScheduleInput};
 
 pub async fn run(cfg: tastile_config::Config, args: SourceTilesArgs) -> Result<ExitCode> {
     let ctx = AppContext::load(cfg)?;
     match args.sub {
-        SourceTilesCommand::List { json, plan: _ } => list(&ctx, json).await,
-        SourceTilesCommand::Create { from_json, title } => create(&ctx, from_json, title).await,
+        SourceTilesCommand::List { json } => list(&ctx, json).await,
+        SourceTilesCommand::Create {
+            from_json,
+            title,
+            once,
+            daily,
+            weekly,
+            days,
+            start_date,
+            utc_offset,
+            exclude,
+            duration,
+            window_minutes,
+            horizon_days,
+            priority,
+            monthly,
+        } => {
+            create(
+                &ctx,
+                from_json,
+                title,
+                once,
+                daily,
+                weekly,
+                days,
+                start_date,
+                utc_offset,
+                exclude,
+                duration,
+                window_minutes,
+                horizon_days,
+                priority,
+                monthly,
+            )
+            .await
+        }
         SourceTilesCommand::Get { id, json } => get(&ctx, id, json).await,
-        SourceTilesCommand::Update { id, from_json } => update(&ctx, id, from_json).await,
-        SourceTilesCommand::Cancel { id, reason } => cancel(&ctx, id, &reason).await,
+        SourceTilesCommand::Update {
+            id,
+            from_json,
+            dry_run,
+            expect_revision,
+        } => update(&ctx, id, from_json, dry_run, expect_revision).await,
+        SourceTilesCommand::Cancel {
+            id,
+            reason_code,
+            dry_run,
+            expect_revision,
+        } => cancel(&ctx, id, reason_code, dry_run, expect_revision).await,
         SourceTilesCommand::Completion { id, json } => completion(&ctx, id, json).await,
         SourceTilesCommand::Placements { id, json } => placements(&ctx, id, json).await,
-        SourceTilesCommand::Reflow { id, from, to } => reflow(&ctx, id, from, to).await,
+        SourceTilesCommand::Reflow {
+            id,
+            from,
+            to,
+            dry_run,
+            estimate,
+            expect_revision,
+        } => reflow(&ctx, id, from, to, dry_run, estimate, expect_revision).await,
     }
 }
 
@@ -35,35 +92,178 @@ async fn list(ctx: &AppContext, json: bool) -> Result<ExitCode> {
         println!("(no source tiles)");
     } else {
         output::print_source_tiles_table(&items);
+        println!("{} source tile(s)", items.len());
     }
     Ok(ExitCode::SUCCESS)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn create(
     ctx: &AppContext,
     from_json: Option<String>,
     title: Option<String>,
+    once: Option<String>,
+    daily: Option<String>,
+    weekly: Option<String>,
+    days: Option<String>,
+    start_date: Option<String>,
+    utc_offset: Option<i32>,
+    exclude: Vec<String>,
+    duration: i64,
+    window_minutes: i64,
+    horizon_days: i64,
+    priority: i32,
+    monthly: bool,
 ) -> Result<ExitCode> {
-    let draft = match (from_json, title) {
-        (Some(path), _) => load_draft(&path).context("could not load --from-json draft")?,
-        (None, Some(t)) => CreateSourceTileDraft::minimal(t),
-        (None, None) => bail!("provide either --title TITLE or --from-json PATH"),
+    if monthly {
+        bail!(
+            "monthly recurrence is not described by the pinned Tastile OpenAPI \
+             (SourceGenerationSchema.kind documents 0 = one-time and 1 = recurring). \
+             Refusing to approximate it as a daily recurrence — wait for the \
+             monthly contract to ship, or model the month with explicit dates."
+        );
+    }
+    if duration <= 0 {
+        bail!("--duration must be a positive number of minutes");
+    }
+    if horizon_days <= 0 {
+        bail!("--horizon-days must be a positive number of days");
+    }
+
+    let draft = match from_json {
+        Some(path) => load_draft(&path).context("could not load --from-json draft")?,
+        None => {
+            let title = title.ok_or_else(|| {
+                anyhow!(
+                    "provide --title together with a schedule (--once, --daily or --weekly), \
+                     or use --from-json"
+                )
+            })?;
+            if once.is_some()
+                && (start_date.is_some() || utc_offset.is_some() || !exclude.is_empty())
+            {
+                bail!(
+                    "--start-date, --utc-offset, and --exclude apply only to recurring --daily or --weekly schedules; --once already contains an exact instant"
+                );
+            }
+            let schedule = build_schedule_input(once, daily, weekly, days, start_date, utc_offset)?;
+            for date in &exclude {
+                parse_excluded_date(date)?;
+            }
+            // `starts_at` is computed with this same fixed offset. Pass it
+            // explicitly as well so Core does not substitute an owner
+            // profile timezone when the operator omits `--utc-offset`.
+            let generation_offset = generation_offset(&schedule, utc_offset);
+            let generation_plan =
+                simple_input::build_generation(&schedule, &exclude, generation_offset);
+            println!("schedule: {}", generation_plan.summary);
+            if !exclude.is_empty() {
+                println!("excluded dates: {}", exclude.join(", "));
+            }
+            let mut draft = CreateSourceTileDraft::minimal(title);
+            draft.generation = Some(generation_plan.generation);
+            draft.window = Some(simple_input::window_from_minutes(window_minutes)?);
+            draft.priority = priority;
+            draft.required_duration_ms = duration
+                .checked_mul(simple_input::MINUTE_MS)
+                .ok_or_else(|| anyhow!("--duration is too large"))?;
+            let horizon = Duration::try_days(horizon_days)
+                .ok_or_else(|| anyhow!("--horizon-days is too large"))?;
+            draft.horizon_end = draft
+                .horizon_start
+                .checked_add_signed(horizon)
+                .ok_or_else(|| anyhow!("--horizon-days exceeds the representable date range"))?;
+            draft
+        }
     };
+
     let resp = app::create_source_tile_draft(ctx, &draft).await?;
     println!("✓ Created source tile.");
     output::print_command_response(&resp);
+    // The create response carries the new source id in `aggregate_meta`;
+    // read its detail once so the credential's owner pin is established
+    // even when the guard probe saw an empty tile list.
+    if let Some(source_tile_id) = resp
+        .aggregate_meta
+        .as_ref()
+        .and_then(|meta| meta.get("source_tile_id"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|raw| Uuid::parse_str(raw).ok())
+    {
+        app::confirm_owner_from_source_tile(ctx, source_tile_id).await?;
+    } else {
+        tracing::warn!(
+            "create response carried no aggregate_meta.source_tile_id; \
+             the credential owner pin was not refreshed by this write"
+        );
+    }
     Ok(ExitCode::SUCCESS)
 }
 
-async fn update(ctx: &AppContext, id: Uuid, from_json: Option<String>) -> Result<ExitCode> {
-    let Some(path) = from_json else {
-        bail!("update requires --from-json PATH; see `docs/architecture.md` for the schema");
+/// Turn the convenience flags into a recurrence the contract can express.
+fn build_schedule_input(
+    once: Option<String>,
+    daily: Option<String>,
+    weekly: Option<String>,
+    days: Option<String>,
+    start_date: Option<String>,
+    utc_offset: Option<i32>,
+) -> Result<ScheduleInput> {
+    if [once.is_some(), daily.is_some(), weekly.is_some()]
+        .into_iter()
+        .filter(|set| *set)
+        .count()
+        > 1
+    {
+        bail!("choose exactly one of --once, --daily or --weekly");
+    }
+    if once.is_some() && (days.is_some() || start_date.is_some() || utc_offset.is_some()) {
+        bail!("--days, --start-date and --utc-offset apply only to --daily or --weekly");
+    }
+    if daily.is_some() && days.is_some() {
+        bail!("--days is only valid with --weekly");
+    }
+    let offset = utc_offset.unwrap_or(0);
+    if let Some(raw) = once {
+        let at = DateTime::parse_from_rfc3339(raw.trim())
+            .map_err(|_| anyhow!("invalid --once timestamp `{raw}`; expected RFC 3339"))?
+            .with_timezone(&Utc);
+        return Ok(ScheduleInput::OneTime { at });
+    }
+    let date = match start_date {
+        Some(raw) => NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d")
+            .map_err(|_| anyhow!("invalid --start-date `{raw}`; expected YYYY-MM-DD"))?,
+        None => (Utc::now() + Duration::minutes(i64::from(offset))).date_naive(),
     };
-    let draft = load_draft(&path).context("could not load --from-json draft")?;
-    let resp = app::update_source_tile_draft(ctx, id, &draft).await?;
-    println!("✓ Updated source tile.");
-    output::print_command_response(&resp);
-    Ok(ExitCode::SUCCESS)
+    if let Some(raw) = daily {
+        let time = simple_input::parse_clock(&raw)?;
+        let anchor = simple_input::local_instant(date, time, offset)?;
+        return Ok(ScheduleInput::Daily { anchor });
+    }
+    if let Some(raw) = weekly {
+        let time = simple_input::parse_clock(&raw)?;
+        let days_raw =
+            days.ok_or_else(|| anyhow!("--weekly needs --days, for example --days mon,wed,fri"))?;
+        let weekdays = simple_input::parse_weekdays(&days_raw)?;
+        let anchor = simple_input::local_instant(date, time, offset)?;
+        return Ok(ScheduleInput::Weekly { anchor, weekdays });
+    }
+    bail!("specify a schedule: --once RFC3339, --daily HH:MM or --weekly HH:MM --days mon,wed")
+}
+
+fn generation_offset(schedule: &ScheduleInput, requested_offset: Option<i32>) -> Option<i32> {
+    match schedule {
+        ScheduleInput::OneTime { .. } => None,
+        ScheduleInput::Daily { .. } | ScheduleInput::Weekly { .. } => {
+            Some(requested_offset.unwrap_or(0))
+        }
+    }
+}
+
+fn parse_excluded_date(raw: &str) -> Result<()> {
+    NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d")
+        .map_err(|_| anyhow!("invalid --exclude date `{raw}`; expected YYYY-MM-DD"))?;
+    Ok(())
 }
 
 async fn get(ctx: &AppContext, id: Uuid, json: bool) -> Result<ExitCode> {
@@ -76,24 +276,95 @@ async fn get(ctx: &AppContext, id: Uuid, json: bool) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-async fn cancel(ctx: &AppContext, id: Uuid, reason: &str) -> Result<ExitCode> {
-    let resp = app::cancel_source_tile(ctx, id, reason).await?;
+async fn update(
+    ctx: &AppContext,
+    id: Uuid,
+    from_json: Option<String>,
+    dry_run: bool,
+    expect_revision: Option<i64>,
+) -> Result<ExitCode> {
+    let Some(path) = from_json else {
+        bail!(
+            "update requires --from-json PATH: a partial JSON patch. Fields you omit are              preserved from the server's stored definition (v1/14 §17), explicit `null`              clears nullable fields, `[]` clears collections, and `horizon` must be              supplied because Core never persists it"
+        );
+    };
+    let patch = read_draft_value(&path).context("could not load update patch")?;
+    let permit = if !dry_run {
+        // Refuse ambiguous/operational targets before the authenticated
+        // pre-read used to merge the patch. The permit is then reused for the
+        // mutation so the expensive identity probe runs only once.
+        Some(app::guard_write(ctx).await?)
+    } else {
+        None
+    };
+    let current = app::show_source_tile(ctx, id).await?;
+    let merged = app::merge_source_tile_update(&current, &patch)?;
+    let diffs = app::diff_source_tile_update(&current, &merged);
+    output::print_diff(&diffs);
+    println!(
+        "impact: {} occurrence(s) / {} placement(s) currently derived; Core recomputes them on update",
+        current.occurrences.len(),
+        current.placements.len()
+    );
+    println!(
+        "note: `horizon` is a materialization input Core never persists (sent, not diffed);          relation refs read back normalized to `existing` — re-author `local` refs explicitly (v1/14 §17-2)"
+    );
+    if dry_run {
+        println!("Dry run: no write sent.");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let permit = permit.ok_or_else(|| anyhow!("update apply requires write preflight"))?;
+    let revision = expect_revision.unwrap_or(current.source.revision);
+    let resp =
+        app::update_source_tile_with_permit(ctx, id, merged, Some(revision), &permit).await?;
+    println!("✓ Updated source tile.");
+    output::print_command_response(&resp);
+    output::print_readback(&app::read_back(ctx, id).await?);
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn cancel(
+    ctx: &AppContext,
+    id: Uuid,
+    reason_code: i32,
+    dry_run: bool,
+    expect_revision: Option<i64>,
+) -> Result<ExitCode> {
+    let permit = if !dry_run {
+        // Gate the target before reading the impact preview on an apply path.
+        Some(app::guard_write(ctx).await?)
+    } else {
+        None
+    };
+    let impact = app::placement_impact(ctx, id, None).await?;
+    output::print_impact("cancel", &impact);
+    if dry_run {
+        println!("Dry run: no write sent.");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let permit = permit.ok_or_else(|| anyhow!("cancel apply requires write preflight"))?;
+    let resp =
+        app::cancel_source_tile_with_permit(ctx, id, reason_code, expect_revision, &permit).await?;
     println!("✓ Cancelled source tile.");
     output::print_command_response(&resp);
+    output::print_readback(&app::read_back(ctx, id).await?);
     Ok(ExitCode::SUCCESS)
 }
 
 async fn completion(ctx: &AppContext, id: Uuid, json: bool) -> Result<ExitCode> {
     let v = app::source_tile_completion(ctx, id).await?;
     // Completion is opaque nested JSON (tasks + time_requirements tree);
-    // we always pretty-print it. `--json` is accepted for symmetry.
-    let _ = json;
-    println!("{}", serde_json::to_string_pretty(&v)?);
+    // keep the machine-readable mode compact for piping.
+    if json {
+        println!("{}", serde_json::to_string(&v)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&v)?);
+    }
     Ok(ExitCode::SUCCESS)
 }
 
 async fn placements(ctx: &AppContext, id: Uuid, json: bool) -> Result<ExitCode> {
-    let items = tastile_api::list_source_tile_placements(ctx, ctx.require_token()?, id, Some(500))
+    let items = tastile_api::list_all_source_tile_placements(ctx, ctx.require_token()?, id)
         .await
         .context("list_source_tile_placements failed")?;
     if json {
@@ -102,6 +373,7 @@ async fn placements(ctx: &AppContext, id: Uuid, json: bool) -> Result<ExitCode> 
         println!("(no placements)");
     } else {
         output::print_placements_table(&items);
+        println!("{} placement(s)", items.len());
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -109,24 +381,109 @@ async fn placements(ctx: &AppContext, id: Uuid, json: bool) -> Result<ExitCode> 
 async fn reflow(
     ctx: &AppContext,
     id: Uuid,
-    from: chrono::DateTime<chrono::Utc>,
-    to: chrono::DateTime<chrono::Utc>,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    dry_run: bool,
+    estimate: bool,
+    expect_revision: Option<i64>,
 ) -> Result<ExitCode> {
-    let resp = app::reflow_source_tile(
+    if from >= to {
+        bail!("--from must be earlier than --to");
+    }
+    let permit = if !dry_run {
+        // Gate the target before reading the impact preview on an apply path.
+        Some(app::guard_write(ctx).await?)
+    } else {
+        None
+    };
+    let impact = app::placement_impact(ctx, id, Some((from, to))).await?;
+    if dry_run {
+        if estimate {
+            println!(
+                "== Local impact estimate (--estimate) ==\n\
+                 This is a local overlap count, NOT the server's reflow \
+                 decision. Do not use it as an apply gate."
+            );
+            output::print_impact("reflow", &impact);
+            println!("Dry run: no write sent.");
+            return Ok(ExitCode::SUCCESS);
+        }
+        match app::reflow_source_tile_preview(
+            ctx,
+            id,
+            tastile_api::Span {
+                start: from,
+                end: to,
+            },
+            expect_revision,
+        )
+        .await?
+        {
+            app::ReflowPreview::Faithful(resp) => {
+                // The server preview is the authoritative change
+                // prediction: it ran the real reflow in a rolled-back
+                // transaction, so its placements, restorations,
+                // replacements, and blocked (unplaced) records are exactly
+                // what apply would produce.  Print it first and label the
+                // local count summary as reference-only.
+                println!(
+                    "== Server reflow preview (authoritative) ==\n\
+                     The server ran the real reflow inside a rolled-back \
+                     transaction. Everything below is the predicted apply \
+                     result; nothing was written."
+                );
+                output::print_command_response(&resp);
+                println!(
+                    "== Local impact estimate (reference only) ==\n\
+                     Counts above the server preview are a local overlap \
+                     estimate, NOT the server's decision."
+                );
+                output::print_impact("reflow", &impact);
+                println!("Dry run: no write sent.");
+                return Ok(ExitCode::SUCCESS);
+            }
+            app::ReflowPreview::Unavailable { status } => {
+                let reason = match status {
+                    403 => "credential lacks the write scope the preview endpoint requires",
+                    404 => {
+                        "preview endpoint is unavailable on this server (pre-#413 Core) \
+                         or the source tile was not found"
+                    }
+                    _ => "unexpected status",
+                };
+                bail!(
+                    "cannot produce a faithful reflow preview: {reason} (HTTP {status}). \
+                     Re-run with --estimate for a local impact estimate only, \
+                     which is not the server's decision."
+                );
+            }
+        }
+    }
+    let permit = permit.ok_or_else(|| anyhow!("reflow apply requires write preflight"))?;
+    println!("Local impact estimate (reference only; the server decides on apply):");
+    output::print_impact("reflow", &impact);
+    let resp = app::reflow_source_tile_with_permit(
         ctx,
         id,
         tastile_api::Span {
             start: from,
             end: to,
         },
+        expect_revision,
+        &permit,
     )
     .await?;
     println!("✓ Reflow dispatched.");
     output::print_command_response(&resp);
+    output::print_readback(&app::read_back(ctx, id).await?);
     Ok(ExitCode::SUCCESS)
 }
 
 fn load_draft(path: &str) -> Result<CreateSourceTileDraft> {
+    Ok(serde_json::from_value(read_draft_value(path)?)?)
+}
+
+fn read_draft_value(path: &str) -> Result<Value> {
     let text = if path == "-" {
         use std::io::Read as _;
         let mut buf = String::new();
@@ -135,5 +492,97 @@ fn load_draft(path: &str) -> Result<CreateSourceTileDraft> {
     } else {
         fs::read_to_string(path).with_context(|| format!("reading draft from `{path}`"))?
     };
-    Ok(serde_json::from_str(&text)?)
+    serde_json::from_str(&text).context("draft must be valid JSON")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn monthly_is_refused_instead_of_approximated() {
+        let draft = build_schedule_input(None, None, None, None, None, None);
+        assert!(draft.is_err());
+    }
+
+    #[test]
+    fn once_parses_an_exact_instant() {
+        let input = build_schedule_input(
+            Some("2026-11-20T09:00:00Z".to_string()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(input, ScheduleInput::OneTime { .. }));
+    }
+
+    #[test]
+    fn conflicting_recurrence_flags_are_rejected() {
+        let err = build_schedule_input(
+            None,
+            Some("09:00".to_string()),
+            Some("10:00".to_string()),
+            Some("mon".to_string()),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("choose exactly one"));
+    }
+
+    #[test]
+    fn recurring_input_defaults_to_an_explicit_utc_offset() {
+        let schedule = build_schedule_input(
+            None,
+            Some("09:00".to_string()),
+            None,
+            None,
+            Some("2026-11-20".to_string()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(generation_offset(&schedule, None), Some(0));
+    }
+
+    #[test]
+    fn weekly_requires_days() {
+        let err = build_schedule_input(
+            None,
+            None,
+            Some("09:00".to_string()),
+            None,
+            Some("2026-11-20".to_string()),
+            Some(540),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--days"));
+    }
+
+    #[test]
+    fn weekly_with_days_builds_the_mask() {
+        let input = build_schedule_input(
+            None,
+            None,
+            Some("09:00".to_string()),
+            Some("mon,wed,fri".to_string()),
+            Some("2026-11-20".to_string()),
+            Some(540),
+        )
+        .unwrap();
+        match input {
+            ScheduleInput::Weekly { weekdays, .. } => {
+                assert_eq!(weekdays.len(), 3);
+            }
+            other => panic!("unexpected schedule input: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn excluded_dates_are_validated() {
+        assert!(parse_excluded_date("2026-12-25").is_ok());
+        assert!(parse_excluded_date("25/12/2026").is_err());
+    }
 }

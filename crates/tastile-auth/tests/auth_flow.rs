@@ -183,10 +183,8 @@ fn status_reason(status: u16) -> &'static str {
 // Helpers.
 // ---------------------------------------------------------------------------
 
-/// Bind a callback listener on loopback and return the listener with a
-/// short timeout. The listener is dropped before `serve` runs, so the port
-/// may be briefly reused — `serve` rebinds synchronously before any HTTP
-/// client can race.
+/// Bind a callback listener on loopback and return it with a short timeout.
+/// The callback module keeps the allocated port bound through `serve`.
 async fn bind_callback() -> CallbackListener {
     let listener = CallbackListener::bind().await.expect("bind loopback");
     // Sanity: the redirect_uri must point at 127.0.0.1.
@@ -197,6 +195,21 @@ async fn bind_callback() -> CallbackListener {
         listener.redirect_uri()
     );
     listener.with_timeout(Duration::from_secs(5))
+}
+
+#[tokio::test]
+async fn callback_listener_keeps_port_reserved_until_serve() {
+    let listener = CallbackListener::bind().await.expect("bind loopback");
+    let uri = Url::parse(&listener.redirect_uri()).expect("parse redirect_uri");
+    let port = uri.port().expect("callback listener port");
+
+    let bind_attempt = std::net::TcpListener::bind(("127.0.0.1", port));
+    assert_eq!(
+        bind_attempt
+            .expect_err("callback port should remain reserved")
+            .kind(),
+        std::io::ErrorKind::AddrInUse
+    );
 }
 
 // ---------------------------------------------------------------------------

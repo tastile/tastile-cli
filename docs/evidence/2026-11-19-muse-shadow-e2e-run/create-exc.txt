@@ -1,0 +1,9 @@
+[2m2026-11-19T15:27:51.016884Z[0m [32m INFO[0m tastile 1.1.0
+schedule: weekly on mon,wed at 2026-11-20T00:00:00+00:00 (fixed UTC offset)
+excluded dates: 2026-11-23, 2026-11-30
+✓ Created source tile.
+  command_id:  01a1f46b-d8f0-7240-b4b1-519b69d6a5b9
+  accepted_at: 2026-11-19 15:27:51.024224732 UTC
+  revision:    1
+  result:      2
+  aggregate:   01a1f46b-d8f0-7240-b4b1-51a254008e65

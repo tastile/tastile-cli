@@ -29,7 +29,7 @@
 //! - The token-exchange HTTP client is configured with `cookie_store(false)`
 //!   so the CLI never carries the Better Auth session cookie.
 
-#![doc(html_root_url = "https://docs.rs/tastile-auth/1.0.0")]
+#![doc(html_root_url = "https://docs.rs/tastile-auth/1.1.0")]
 
 pub mod browser;
 pub mod callback;
@@ -40,7 +40,8 @@ pub mod server_bridge;
 pub use browser::open_browser;
 pub use callback::{CallbackListener, CallbackOutcome};
 pub use credential::{
-    CredentialStore, DEFAULT_SERVICE, DEFAULT_USER, KeyringStore, MemoryStore, StoredToken,
+    CredentialStore, DEFAULT_SERVICE, DEFAULT_USER, FileCredentialStore, KeyringStore, MemoryStore,
+    StoredToken,
 };
 pub use pkce::{PkcePair, PkceState, build_authorization_url};
 pub use server_bridge::{

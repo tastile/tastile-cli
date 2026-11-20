@@ -18,6 +18,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::json;
 
+#[path = "src/drift.rs"]
+mod drift;
+
 #[derive(Debug, Deserialize)]
 struct OpenApiDoc {
     openapi: String,
@@ -47,6 +50,12 @@ enum ResponseSpec {
     Ref(&'static str),
     /// `items: $ref ...` — array of the named schema.
     ArrayOf(&'static str),
+    /// During the unpublished cursor-contract transition, accept the pinned
+    /// legacy array or the new named ListResponse schema.
+    CursorListOrArrayOf {
+        legacy_item: &'static str,
+        cursor_schema: &'static str,
+    },
     /// `schema: {}` — empty schema, content is opaque to the client.
     Empty,
 }
@@ -74,11 +83,21 @@ struct OperationContract {
 /// of truth for what the CLI exercises from the pinned spec.
 const CONTRACTS: &[OperationContract] = &[
     OperationContract {
+        operation_id: "get_timeline",
+        method: "get",
+        path: "/v1/timeline",
+        request_body_schema: None,
+        response_200: ResponseSpec::ArrayOf("TimelineItemSchema"),
+        path_params: &[],
+        required_envelope_fields: &[],
+        payload_required_fields: &[],
+    },
+    OperationContract {
         operation_id: "list_tiles",
         method: "get",
         path: "/v1/tiles",
         request_body_schema: None,
-        response_200: ResponseSpec::ArrayOf("TileListView"),
+        response_200: ResponseSpec::Ref("TileListResponse"),
         path_params: &[],
         required_envelope_fields: &[],
         payload_required_fields: &[],
@@ -88,7 +107,10 @@ const CONTRACTS: &[OperationContract] = &[
         method: "get",
         path: "/v1/prompts/pending",
         request_body_schema: None,
-        response_200: ResponseSpec::ArrayOf("PromptView"),
+        response_200: ResponseSpec::CursorListOrArrayOf {
+            legacy_item: "PromptView",
+            cursor_schema: "PromptListResponse",
+        },
         path_params: &[],
         required_envelope_fields: &[],
         payload_required_fields: &[],
@@ -101,7 +123,7 @@ const CONTRACTS: &[OperationContract] = &[
         response_200: ResponseSpec::Ref("CommandResponse"),
         path_params: &[],
         required_envelope_fields: &["idempotency_key", "payload"],
-        payload_required_fields: &[],
+        payload_required_fields: &["kind"],
     },
     OperationContract {
         operation_id: "resolve_prompt",
@@ -124,11 +146,24 @@ const CONTRACTS: &[OperationContract] = &[
         payload_required_fields: &["prompt_id", "resolution"],
     },
     OperationContract {
+        operation_id: "publish_schedule_definition",
+        method: "post",
+        path: "/v1/schedule-definitions",
+        request_body_schema: Some("PublishScheduleDefinitionRequest"),
+        response_200: ResponseSpec::Ref("CommandResponse"),
+        path_params: &[],
+        required_envelope_fields: &["idempotency_key", "payload"],
+        payload_required_fields: &["tile", "plan", "reference_targets", "windows", "flows"],
+    },
+    OperationContract {
         operation_id: "list_source_tiles",
         method: "get",
         path: "/v1/source-tiles",
         request_body_schema: None,
-        response_200: ResponseSpec::ArrayOf("SourceTileRead"),
+        response_200: ResponseSpec::CursorListOrArrayOf {
+            legacy_item: "SourceTileRead",
+            cursor_schema: "SourceTileListResponse",
+        },
         path_params: &[],
         required_envelope_fields: &[],
         payload_required_fields: &[],
@@ -171,7 +206,7 @@ const CONTRACTS: &[OperationContract] = &[
         response_200: ResponseSpec::Ref("CommandResponse"),
         path_params: &["id"],
         required_envelope_fields: &["idempotency_key", "payload"],
-        payload_required_fields: &[],
+        payload_required_fields: &["reason"],
     },
     OperationContract {
         operation_id: "get_source_tile_completion",
@@ -188,7 +223,10 @@ const CONTRACTS: &[OperationContract] = &[
         method: "get",
         path: "/v1/source-tiles/{id}/placements",
         request_body_schema: None,
-        response_200: ResponseSpec::ArrayOf("PlacementTileRead"),
+        response_200: ResponseSpec::CursorListOrArrayOf {
+            legacy_item: "PlacementTileRead",
+            cursor_schema: "PlacementTileListResponse",
+        },
         path_params: &["id"],
         required_envelope_fields: &[],
         payload_required_fields: &[],
@@ -200,7 +238,17 @@ const CONTRACTS: &[OperationContract] = &[
         request_body_schema: Some("ReflowSourceTileRequest"),
         response_200: ResponseSpec::Ref("CommandResponse"),
         path_params: &["id"],
-        required_envelope_fields: &["idempotency_key", "payload"],
+        required_envelope_fields: &["expected_revision", "idempotency_key", "payload"],
+        payload_required_fields: &["range"],
+    },
+    OperationContract {
+        operation_id: "preview_source_tile_reflow",
+        method: "post",
+        path: "/v1/source-tiles/{id}/reflow/preview",
+        request_body_schema: Some("ReflowSourceTileRequest"),
+        response_200: ResponseSpec::Ref("CommandResponse"),
+        path_params: &["id"],
+        required_envelope_fields: &["expected_revision", "idempotency_key", "payload"],
         payload_required_fields: &["range"],
     },
     OperationContract {
@@ -512,16 +560,46 @@ fn check_contract(
                     return;
                 }
             }
-            if !contract.payload_required_fields.is_empty() {
-                let payload_required = payload_required_fields(expected, schemas);
-                for required in contract.payload_required_fields {
-                    if !payload_required.contains(*required) {
-                        emit_error(&format!(
-                            "tastile-api: contract drift: payload for `{} {}` is missing required field `{}`",
-                            contract.method, contract.path, required
-                        ));
-                        return;
-                    }
+            let unmodelled = drift::unmodelled_required_fields(
+                &body_required,
+                contract.required_envelope_fields,
+                drift::known_optional_envelope_fields(expected),
+            );
+            if !unmodelled.is_empty() {
+                emit_error(&format!(
+                    "tastile-api: contract drift: request body for `{} {}` (schema `{}`) adds required field(s) not modelled by the typed client: {:?}",
+                    contract.method, contract.path, expected, unmodelled
+                ));
+                return;
+            }
+            let payload_required = drift::payload_required_fields(expected, schemas);
+            for required in contract.payload_required_fields {
+                if !payload_required
+                    .as_ref()
+                    .is_some_and(|fields| fields.contains(*required))
+                {
+                    emit_error(&format!(
+                        "tastile-api: contract drift: payload for `{} {}` is missing required field `{}`",
+                        contract.method, contract.path, required
+                    ));
+                    return;
+                }
+            }
+            // Check every payload schema, including payloads whose current
+            // schema has no required fields and contract rows with an empty
+            // modelled-field list. This catches newly-required wire fields.
+            if let Some(payload_required) = payload_required {
+                let unmodelled = drift::unmodelled_required_fields(
+                    &payload_required,
+                    contract.payload_required_fields,
+                    &[],
+                );
+                if !unmodelled.is_empty() {
+                    emit_error(&format!(
+                        "tastile-api: contract drift: payload for `{} {}` adds required field(s) not modelled by the typed client: {:?}",
+                        contract.method, contract.path, unmodelled
+                    ));
+                    return;
                 }
             }
         }
@@ -608,6 +686,19 @@ fn check_response(contract: &OperationContract, method_item: &serde_yaml::Mappin
                 }
             }
         }
+        ResponseSpec::CursorListOrArrayOf {
+            legacy_item,
+            cursor_schema,
+        } => {
+            let actual = ref_name(resp200.and_then(|r| r.get("content")));
+            if actual.as_deref() != Some(cursor_schema) {
+                let legacy_contract = OperationContract {
+                    response_200: ResponseSpec::ArrayOf(legacy_item),
+                    ..*contract
+                };
+                check_response(&legacy_contract, method_item);
+            }
+        }
         ResponseSpec::ArrayOf(expected) => {
             let items_ref = resp200
                 .and_then(|r| r.get("content"))
@@ -667,35 +758,19 @@ fn is_empty_schema(s: &serde_yaml::Value) -> bool {
 }
 
 fn schema_required_fields(name: &str, schemas: &serde_yaml::Mapping) -> BTreeSet<String> {
-    let Some(schema) = schemas.get(name).and_then(|s| s.as_mapping()) else {
+    let Some(schema) = schemas.get(name).and_then(|schema| schema.as_mapping()) else {
         return BTreeSet::new();
     };
     schema
         .get("required")
-        .and_then(|r| r.as_sequence())
-        .map(|seq| {
-            seq.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .and_then(|required| required.as_sequence())
+        .map(|required| {
+            required
+                .iter()
+                .filter_map(|field| field.as_str().map(str::to_owned))
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn payload_required_fields(envelope: &str, schemas: &serde_yaml::Mapping) -> BTreeSet<String> {
-    let Some(schema) = schemas.get(envelope).and_then(|s| s.as_mapping()) else {
-        return BTreeSet::new();
-    };
-    let Some(properties) = schema.get("properties").and_then(|p| p.as_mapping()) else {
-        return BTreeSet::new();
-    };
-    let Some(payload) = properties.get("payload").and_then(|p| p.as_mapping()) else {
-        return BTreeSet::new();
-    };
-    let Some(ref_str) = payload.get("$ref").and_then(|r| r.as_str()) else {
-        return BTreeSet::new();
-    };
-    let payload_schema = ref_str.rsplit('/').next().unwrap_or(ref_str);
-    schema_required_fields(payload_schema, schemas)
 }
 
 fn observe_spec(paths: &serde_yaml::Mapping) -> serde_json::Value {

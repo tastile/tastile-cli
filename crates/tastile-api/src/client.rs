@@ -9,19 +9,26 @@
 //! Operations live in per-endpoint modules (`tiles`, `prompts`, …). They all
 //! take `&ApiClient` and produce typed responses.
 
+use std::fmt;
 use std::time::Duration;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tracing::debug;
-use url::Url;
+use url::{Host, Url};
 
 use crate::error::{ApiError, ApiResult};
 
-/// Raw bearer token. Construction goes through [`BearerToken::new`] which
-/// enforces non-empty; never log this value.
-#[derive(Debug, Clone)]
+/// Raw bearer token. Construction does not validate token contents; never log
+/// this value.
+#[derive(Clone)]
 pub struct BearerToken(String);
+
+impl fmt::Debug for BearerToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("BearerToken").field(&"[REDACTED]").finish()
+    }
+}
 
 impl BearerToken {
     pub fn new(token: impl Into<String>) -> Self {
@@ -53,7 +60,39 @@ impl ApiConfig {
     /// value as-is; this is the only place the URL is validated.
     pub fn new(base_url: &str) -> ApiResult<Self> {
         let url = Url::parse(base_url.trim_end_matches('/'))
-            .map_err(|e| ApiError::InvalidBaseUrl(format!("{base_url}: {e}")))?;
+            .map_err(|e| ApiError::InvalidBaseUrl(format!("invalid API base URL: {e}")))?;
+        if url.port() == Some(31_400) {
+            return Err(ApiError::InvalidBaseUrl(
+                "API base URL may not use reserved operational port 31400".into(),
+            ));
+        }
+        if url.path() != "/" {
+            return Err(ApiError::InvalidBaseUrl(
+                "API base URL must not contain a path component".into(),
+            ));
+        }
+        if !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(ApiError::InvalidBaseUrl(
+                "API base URL must not contain credentials, a query, or a fragment".into(),
+            ));
+        }
+        let host = url
+            .host()
+            .ok_or_else(|| ApiError::InvalidBaseUrl("API base URL must contain a host".into()))?;
+        if url.scheme() == "http" && !is_loopback_host(&host) {
+            return Err(ApiError::InvalidBaseUrl(
+                "remote API bases must use HTTPS; plaintext HTTP is allowed only for loopback test targets".into(),
+            ));
+        }
+        if url.scheme() != "http" && url.scheme() != "https" {
+            return Err(ApiError::InvalidBaseUrl(
+                "API base URL scheme must be HTTP or HTTPS".into(),
+            ));
+        }
         Ok(Self {
             base_url: url,
             request_timeout: Duration::from_secs(15),
@@ -66,6 +105,19 @@ impl ApiConfig {
     pub fn with_timeout(mut self, d: Duration) -> Self {
         self.request_timeout = d;
         self
+    }
+}
+
+fn is_loopback_host(host: &Host<&str>) -> bool {
+    match host {
+        Host::Ipv4(ip) => ip.is_loopback(),
+        Host::Ipv6(ip) => {
+            ip.is_loopback()
+                || ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| mapped.is_loopback())
+        }
+        Host::Domain(name) => name.trim_end_matches('.').eq_ignore_ascii_case("localhost"),
     }
 }
 
@@ -90,6 +142,10 @@ impl ApiClient {
         let inner = reqwest::Client::builder()
             .timeout(cfg.request_timeout)
             .user_agent(cfg.user_agent.clone())
+            // Never follow redirects: an authenticated POST (e.g. schedule
+            // publish) must not be bounced by a 3xx to a different host than
+            // the one the caller's write-guard classified.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(ApiError::Transport)?;
         Ok(Self { inner, cfg })
@@ -311,8 +367,33 @@ mod tests {
     }
 
     #[test]
+    fn api_config_refuses_reserved_operational_port_for_every_request() {
+        for base in [
+            "http://127.0.0.1:31400",
+            "https://localhost:31400",
+            "https://api.example.test:31400",
+        ] {
+            let error = ApiConfig::new(base).expect_err("reserved port must be rejected");
+            assert!(error.to_string().contains("31400"), "{base}: {error}");
+        }
+    }
+
+    #[test]
+    fn api_config_rejects_path_components() {
+        assert!(ApiConfig::new("https://api.example.test/v1").is_err());
+        assert!(ApiConfig::new("https://api.example.test/").is_ok());
+    }
+
+    #[test]
     fn api_config_rejects_garbage() {
         assert!(ApiConfig::new("not a url").is_err());
+    }
+
+    #[test]
+    fn api_config_allows_plaintext_only_for_loopback() {
+        assert!(ApiConfig::new("http://127.0.0.1:31500").is_ok());
+        assert!(ApiConfig::new("http://localhost:31500").is_ok());
+        assert!(ApiConfig::new("http://api.example.test").is_err());
     }
 
     #[test]
@@ -321,5 +402,13 @@ mod tests {
         let out = redact(input);
         assert!(out.contains("[redacted-bearer]"));
         assert!(!out.contains("abcdef123456"));
+    }
+
+    #[test]
+    fn bearer_token_debug_redacts_the_secret() {
+        let token = BearerToken::new("do-not-print-this-token");
+        let debug = format!("{token:?}");
+        assert!(!debug.contains("do-not-print-this-token"));
+        assert!(debug.contains("[REDACTED]"));
     }
 }

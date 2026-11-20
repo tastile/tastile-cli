@@ -2,11 +2,9 @@
 
 use std::process::ExitCode;
 
+use crate::app::AppContext;
 use anyhow::Result;
 use tastile_api::{ApiClient, ApiConfig};
-use tastile_auth::{CredentialStore, KeyringStore};
-
-use crate::app::AppContext;
 
 pub async fn run(cfg: tastile_config::Config) -> Result<ExitCode> {
     let ctx = AppContext::load(cfg)?;
@@ -32,8 +30,9 @@ pub async fn run(cfg: tastile_config::Config) -> Result<ExitCode> {
     println!("  config:    {:?}", tastile_config::default_config_path());
     println!();
 
-    println!("OS credential store:");
-    match KeyringStore.load(tastile_auth::DEFAULT_SERVICE, tastile_auth::DEFAULT_USER) {
+    println!("Credential store:");
+    let store = crate::app::credential_store(&ctx.config)?;
+    match store.load(tastile_auth::DEFAULT_SERVICE, tastile_auth::DEFAULT_USER) {
         Ok(Some(_)) => println!("  credential: present (token not displayed)"),
         Ok(None) => println!("  credential: not set"),
         Err(e) => println!("  credential: error: {e}"),

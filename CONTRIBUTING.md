@@ -56,8 +56,8 @@ mise run ci
      are explicitly permitted.
    - `required_conversation_resolution: true` is enabled, so all
      review comments must be resolved before merge.
-   - `required_signatures: true` is enabled, so all commits must be
-     signed.
+   - `enforce_admins: true` is enabled; `required_signatures` is
+     currently **off**.
 
 ## Coding rules
 

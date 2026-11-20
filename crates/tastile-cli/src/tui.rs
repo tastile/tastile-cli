@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! ┌────────────────────────────────────────────────────────────┐
-//! │ tastile 1.0.0  api=https://api.tastile.app                │
+//! │ tastile 1.1.0  api=https://api.tastile.app                │
 //! │ ● Signed in (subject=u-1)                                  │
 //! ├──────────────────────────────────┬─────────────────────────┤
 //! │ Today's tiles                   │ Pending prompts          │
@@ -27,11 +27,11 @@
 //!
 //! - `q` / `Esc` — quit
 //! - `r` — manual refresh
-//! - `n` — create a new source tile (asks for a title)
+//! - `n`, then `y` — create a new source tile after confirmation
 //! - `c` — cancel the focused source tile
 //! - `s` / `p` / `R` / `f` — start / pause / resume / finish the focused
 //!   placement or execution
-//! - `P` — resolve the focused prompt
+//! - `[` / `]` — focus a prompt; `P` then `1` / `2` / `3` resolves it
 //!
 //! Errors are surfaced in a bottom status line; the TUI never panics on a
 //! network blip, it just keeps the last good data and shows the error.
@@ -58,6 +58,38 @@ use crate::cli::{AuthArgs, AuthCommand};
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
+#[derive(Default)]
+struct NewTileConfirmation {
+    pending: bool,
+}
+
+impl NewTileConfirmation {
+    fn begin(&mut self) {
+        self.pending = true;
+    }
+
+    fn confirm(&mut self) -> bool {
+        std::mem::take(&mut self.pending)
+    }
+
+    fn cancel(&mut self) -> bool {
+        std::mem::take(&mut self.pending)
+    }
+}
+
+fn selected_prompt_index(prompt_count: usize, focused: usize) -> Option<usize> {
+    (focused < prompt_count).then_some(focused)
+}
+
+fn resolution_for_key(key: KeyCode) -> Option<PromptResolution> {
+    match key {
+        KeyCode::Char('1') => Some(PromptResolution::Acknowledged),
+        KeyCode::Char('2') => Some(PromptResolution::Dismissed),
+        KeyCode::Char('3') => Some(PromptResolution::ActionTaken),
+        _ => None,
+    }
+}
+
 /// One row in the source-tile list. The TUI shows `SourceTileRead`s so the
 /// user can pick one to start/cancel.
 #[derive(Debug, Clone)]
@@ -75,6 +107,9 @@ pub struct App {
     pub prompts: Vec<tastile_api::PromptView>,
     pub sources: Vec<SourceRow>,
     pub focused: usize,
+    pub focused_prompt: usize,
+    create_confirmation: NewTileConfirmation,
+    prompt_resolution_pending: bool,
     pub status: String,
     pub next_refresh: std::time::Instant,
 }
@@ -87,6 +122,9 @@ impl App {
             prompts: Vec::new(),
             sources: Vec::new(),
             focused: 0,
+            focused_prompt: 0,
+            create_confirmation: NewTileConfirmation::default(),
+            prompt_resolution_pending: false,
             status: "loading...".into(),
             next_refresh: std::time::Instant::now(),
         }
@@ -130,6 +168,9 @@ async fn refresh(app: &mut App) {
     if app.focused >= sources.len() && !sources.is_empty() {
         app.focused = sources.len() - 1;
     }
+    if app.focused_prompt >= prompts.len() && !prompts.is_empty() {
+        app.focused_prompt = prompts.len() - 1;
+    }
     app.tiles = tiles;
     app.prompts = prompts;
     app.sources = sources;
@@ -148,8 +189,34 @@ async fn event_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
         if event::poll(Duration::from_millis(250))? {
             if let Event::Key(k) = event::read()? {
                 if k.kind == KeyEventKind::Press {
+                    if app.create_confirmation.pending
+                        && !matches!(k.code, KeyCode::Char('y') | KeyCode::Esc)
+                    {
+                        app.create_confirmation.cancel();
+                    }
+                    if app.prompt_resolution_pending
+                        && !matches!(
+                            k.code,
+                            KeyCode::Char('1')
+                                | KeyCode::Char('2')
+                                | KeyCode::Char('3')
+                                | KeyCode::Esc
+                        )
+                    {
+                        app.prompt_resolution_pending = false;
+                    }
                     match k.code {
-                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                        KeyCode::Char('q') => return Ok(()),
+                        KeyCode::Esc => {
+                            let cancelled_create = app.create_confirmation.cancel();
+                            let cancelled_prompt =
+                                std::mem::take(&mut app.prompt_resolution_pending);
+                            if cancelled_create || cancelled_prompt {
+                                app.status = "Pending action cancelled.".into();
+                            } else {
+                                return Ok(());
+                            }
+                        }
                         KeyCode::Char('r') => {
                             refresh(app).await;
                         }
@@ -164,7 +231,14 @@ async fn event_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
                             }
                         }
                         KeyCode::Char('n') => {
-                            new_source_tile(app).await;
+                            app.create_confirmation.begin();
+                            app.status =
+                                "Create a source tile? Press y to confirm, Esc to cancel.".into();
+                        }
+                        KeyCode::Char('y') => {
+                            if app.create_confirmation.confirm() {
+                                new_source_tile(app).await;
+                            }
                         }
                         KeyCode::Char('c') => {
                             cancel_focused(app).await;
@@ -188,7 +262,32 @@ async fn event_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
                                 "use `tastile executions finish <execution-id> --kind N`".into();
                         }
                         KeyCode::Char('P') => {
-                            resolve_focused_prompt(app).await;
+                            if selected_prompt_index(app.prompts.len(), app.focused_prompt)
+                                .is_some()
+                            {
+                                app.prompt_resolution_pending = true;
+                                app.status = "Resolve focused prompt: 1 acknowledge, 2 dismiss, 3 action taken.".into();
+                            } else {
+                                app.status = "no pending prompts".into();
+                            }
+                        }
+                        KeyCode::Char('1') | KeyCode::Char('2') | KeyCode::Char('3') => {
+                            if app.prompt_resolution_pending {
+                                app.prompt_resolution_pending = false;
+                                if let Some(resolution) = resolution_for_key(k.code) {
+                                    resolve_focused_prompt(app, resolution).await;
+                                }
+                            }
+                        }
+                        KeyCode::Char('[') => {
+                            if app.focused_prompt > 0 {
+                                app.focused_prompt -= 1;
+                            }
+                        }
+                        KeyCode::Char(']') => {
+                            if app.focused_prompt + 1 < app.prompts.len() {
+                                app.focused_prompt += 1;
+                            }
                         }
                         KeyCode::Char('a') => {
                             // Operator escape hatch: spawn the auth flow from
@@ -237,7 +336,8 @@ async fn cancel_focused(app: &mut App) {
         app.status = "no source tile selected".into();
         return;
     };
-    match app::cancel_source_tile(&app.ctx, row.id, "user-requested").await {
+    // Numeric cancel-reason registry code (0 = user-requested).
+    match app::cancel_source_tile(&app.ctx, row.id, 0, None).await {
         Ok(_) => {
             app.status = format!("✓ Cancelled source tile {}", row.title);
             refresh(app).await;
@@ -246,15 +346,12 @@ async fn cancel_focused(app: &mut App) {
     }
 }
 
-async fn resolve_focused_prompt(app: &mut App) {
-    let Some(p) = app.prompts.first().cloned() else {
+async fn resolve_focused_prompt(app: &mut App, resolution: PromptResolution) {
+    let Some(index) = selected_prompt_index(app.prompts.len(), app.focused_prompt) else {
         app.status = "no pending prompts".into();
         return;
     };
-    let resolution = match p.kind {
-        0 => PromptResolution::Acknowledged, // STARTUP_RECOVERY
-        _ => PromptResolution::Dismissed,
-    };
+    let p = app.prompts[index].clone();
     match app::resolve_prompt(&app.ctx, p.id, resolution, None).await {
         Ok(_) => {
             app.status = format!("✓ Resolved prompt {}", p.id);
@@ -368,9 +465,23 @@ fn render(f: &mut ratatui::Frame, app: &App) {
     let prompt_items: Vec<ListItem> = app
         .prompts
         .iter()
-        .map(|p| {
+        .enumerate()
+        .map(|(i, p)| {
+            let marker = if i == app.focused_prompt {
+                "▶ "
+            } else {
+                "  "
+            };
+            let style = if i == app.focused_prompt {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
             ListItem::new(Line::from(vec![
-                Span::raw(format!("kind={} ", p.kind)),
+                Span::styled(marker, style),
+                Span::styled(format!("kind={} ", p.kind), style),
                 Span::styled(
                     p.note.clone().unwrap_or_else(|| "-".into()),
                     Style::default().fg(Color::Cyan),
@@ -385,7 +496,7 @@ fn render(f: &mut ratatui::Frame, app: &App) {
     let footer = Paragraph::new(vec![
         Line::from(Span::styled(&app.status, Style::default().fg(Color::Gray))),
         Line::from(Span::styled(
-            "n new tile  c cancel  P resolve prompt  s/p/R/f execution",
+            "n new tile  y confirm  c cancel  P then 1/2/3 resolve prompt",
             Style::default().add_modifier(Modifier::DIM),
         )),
     ])
@@ -401,7 +512,11 @@ fn render(f: &mut ratatui::Frame, app: &App) {
         Span::styled("a", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(" auth  "),
         Span::styled("↑↓", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(" navigate"),
+        Span::raw(" source  "),
+        Span::styled("[ ]", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(" prompts  "),
+        Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(" cancel / quit"),
     ]));
     f.render_widget(help, chunks[3]);
 }
@@ -419,4 +534,41 @@ fn restore_terminal(terminal: &mut Tui) -> Result<()> {
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_tile_creation_requires_a_separate_confirmation() {
+        let mut confirmation = NewTileConfirmation::default();
+        assert!(!confirmation.confirm());
+        confirmation.begin();
+        assert!(confirmation.confirm());
+        assert!(!confirmation.confirm());
+    }
+
+    #[test]
+    fn prompt_navigation_selects_the_focused_row() {
+        assert_eq!(selected_prompt_index(3, 1), Some(1));
+        assert_eq!(selected_prompt_index(1, 1), None);
+    }
+
+    #[test]
+    fn prompt_resolution_requires_an_explicit_resolution_key() {
+        assert_eq!(
+            resolution_for_key(KeyCode::Char('1')),
+            Some(PromptResolution::Acknowledged)
+        );
+        assert_eq!(
+            resolution_for_key(KeyCode::Char('2')),
+            Some(PromptResolution::Dismissed)
+        );
+        assert_eq!(
+            resolution_for_key(KeyCode::Char('3')),
+            Some(PromptResolution::ActionTaken)
+        );
+        assert_eq!(resolution_for_key(KeyCode::Char('P')), None);
+    }
 }

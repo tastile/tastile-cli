@@ -13,8 +13,8 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use tastile_api::{ApiClient, ApiConfig, BearerToken};
 use tastile_auth::{
-    AuthorizationCode, CallbackListener, CredentialStore, KeyringStore, PkceState,
-    TokenExchangeResponse, build_authorization_url, open_browser,
+    AuthorizationCode, CallbackListener, PkceState, TokenExchangeResponse, build_authorization_url,
+    open_browser,
 };
 use tastile_config::{Config, with_env_overrides};
 use tracing::{info, warn};
@@ -37,6 +37,9 @@ pub async fn run(cfg: Config, args: AuthArgs) -> Result<ExitCode> {
 
 async fn login(cfg: Config, print_url: bool, client_id: Option<String>) -> Result<ExitCode> {
     let cfg = with_env_overrides(cfg);
+    // Validate and normalize the API base before storing it with the token.
+    // In particular, do not persist a URL that could carry query credentials.
+    ApiConfig::new(&cfg.api_url)?;
     let client_id = client_id.unwrap_or(cfg.oauth_client_id.clone());
     let web_base = Url::parse(&cfg.web_url).context("invalid web_url in config")?;
 
@@ -99,7 +102,7 @@ async fn login(cfg: Config, print_url: bool, client_id: Option<String>) -> Resul
         parse_expires_at(expires_at.as_deref()),
         subject,
     );
-    KeyringStore
+    crate::app::credential_store(&cfg)?
         .save(
             tastile_auth::DEFAULT_SERVICE,
             tastile_auth::DEFAULT_USER,
@@ -112,7 +115,7 @@ async fn login(cfg: Config, print_url: bool, client_id: Option<String>) -> Resul
 
 async fn status(cfg: Config) -> Result<ExitCode> {
     let cfg = with_env_overrides(cfg);
-    let store = KeyringStore;
+    let store = crate::app::credential_store(&cfg)?;
 
     let loaded = store
         .load(tastile_auth::DEFAULT_SERVICE, tastile_auth::DEFAULT_USER)
@@ -125,10 +128,14 @@ async fn status(cfg: Config) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Some(token) => {
+            let api = ApiClient::new(ApiConfig::new(&cfg.api_url)?)?;
             println!("Signed in.");
-            println!("  API base:  {}", token.api_base_url);
+            println!("  API base:  {}", safe_api_base_label(&token.api_base_url));
             if let Some(sub) = token.subject {
                 println!("  Subject:   {sub}");
+            }
+            if let Some(owner) = token.owner_id.as_deref() {
+                println!("  Owner pin: {owner}");
             }
             if let Some(exp) = token.expires_at {
                 println!("  Expires:   {exp}");
@@ -136,14 +143,24 @@ async fn status(cfg: Config) -> Result<ExitCode> {
                     println!("  (token is EXPIRED — re-run `tastile auth login`)");
                 }
             }
-            if token.api_base_url != cfg.api_url {
+            let base_matches_config =
+                crate::safety::api_bases_match(&token.api_base_url, &cfg.api_url);
+            if !base_matches_config {
                 println!(
                     "  Note: stored API base does not match current config (`{}`)",
-                    cfg.api_url
+                    api.config().base_url
                 );
+                println!("  Reachable:  skipped (API base mismatch)");
+                return Ok(ExitCode::SUCCESS);
+            }
+            if token
+                .expires_at
+                .is_some_and(|expires_at| expires_at <= Utc::now())
+            {
+                println!("  Reachable:  skipped (token expired)");
+                return Ok(ExitCode::SUCCESS);
             }
             // Reachability probe against /v1/tiles (read-only, idempotent).
-            let api = ApiClient::new(ApiConfig::new(&cfg.api_url)?)?;
             let bearer = BearerToken::new(token.bearer.clone());
             match tastile_api::list_tiles(
                 &api,
@@ -167,17 +184,29 @@ async fn status(cfg: Config) -> Result<ExitCode> {
 
 async fn logout(cfg: Config) -> Result<ExitCode> {
     let cfg = with_env_overrides(cfg);
-    let store = KeyringStore;
+    let store = crate::app::credential_store(&cfg)?;
 
     let loaded = store
         .load(tastile_auth::DEFAULT_SERVICE, tastile_auth::DEFAULT_USER)
         .context("credential store error")?;
-    if let Some(token) = loaded {
-        let api = ApiClient::new(ApiConfig::new(&cfg.api_url)?)?;
-        let bearer = BearerToken::new(token.bearer.clone());
-        match tastile_api::auth::signout(&api, &bearer).await {
+    if loaded.is_some() {
+        // Server-side revocation is a mutation too, so run it through the
+        // same target, credential-binding, expiry and identity checks as
+        // every other API write. Local logout must still complete when the
+        // configured API is unsafe or unreachable.
+        let revoke = async {
+            let ctx = crate::app::AppContext::load(cfg.clone())?;
+            crate::app::guard_write(&ctx).await?;
+            let bearer = ctx.require_token()?;
+            tastile_api::auth::signout(&ctx.api, bearer)
+                .await
+                .context("signout request failed")?;
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+        match revoke {
             Ok(()) => println!("✓ Server credential revoked."),
-            Err(e) => warn!("could not revoke server-side: {e}"),
+            Err(e) => warn!("skipping server-side revocation: {e:#}"),
         }
     }
     store
@@ -192,4 +221,37 @@ fn parse_expires_at(raw: Option<&str>) -> Option<chrono::DateTime<chrono::Utc>> 
     chrono::DateTime::parse_from_rfc3339(raw)
         .ok()
         .map(|d| d.with_timezone(&chrono::Utc))
+}
+
+fn safe_api_base_label(raw: &str) -> String {
+    match Url::parse(raw.trim_end_matches('/')) {
+        Ok(mut url) => {
+            let _ = url.set_username("");
+            let _ = url.set_password(None);
+            url.set_query(None);
+            url.set_fragment(None);
+            url.to_string()
+        }
+        Err(_) => "[invalid API base]".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_base_status_label_redacts_credentials_and_query() {
+        let label = safe_api_base_label(
+            "https://user:password@api.example.test/v1?access_token=secret#fragment",
+        );
+        assert_eq!(label, "https://api.example.test/v1");
+        assert!(!label.contains("password"));
+        assert!(!label.contains("secret"));
+    }
+
+    #[test]
+    fn api_base_status_label_rejects_malformed_urls() {
+        assert_eq!(safe_api_base_label("not a url"), "[invalid API base]");
+    }
 }
