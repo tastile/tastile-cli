@@ -85,9 +85,7 @@ pub fn unmodelled_required_fields(
 /// CLI and may become required in a future published OpenAPI revision.
 pub fn known_optional_envelope_fields(schema: &str) -> &'static [&'static str] {
     match schema {
-        "UpdateSourceTileRequest" | "CancelSourceTileRequest" | "ReflowSourceTileRequest" => {
-            &["expected_revision"]
-        }
+        "UpdateSourceTileRequest" | "CancelSourceTileRequest" => &["expected_revision"],
         _ => &[],
     }
 }
@@ -123,9 +121,10 @@ mod tests {
     }
 
     #[test]
-    fn reflow_expected_revision_is_known_optional_until_the_pin_is_bumped() {
+    fn reflow_expected_revision_is_contract_required_since_the_v3_9_pin() {
+        assert!(known_optional_envelope_fields("ReflowSourceTileRequest").is_empty());
         assert_eq!(
-            known_optional_envelope_fields("ReflowSourceTileRequest"),
+            known_optional_envelope_fields("UpdateSourceTileRequest"),
             &["expected_revision"]
         );
     }
